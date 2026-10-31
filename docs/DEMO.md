@@ -4,6 +4,11 @@ Demonstração presencial, rodando no notebook. Dados fictícios de uma lavander
 
 ## Rodar com um comando (pacote para compartilhar)
 
+**Mac sem Docker:** siga [INICIAR-DEMO.md](../INICIAR-DEMO.md) e execute
+`bash scripts/demo-mac.sh` na pasta do projeto. O comando verifica o macOS,
+instala os componentes locais e preserva os dados em `.demo-mac/` entre usos.
+Não use `pnpm demo:reset` nesse modo: ele pertence ao Compose antigo.
+
 Instale e abra o Docker Desktop com Docker Compose v2. Para obter pelo Git:
 
 ```sh

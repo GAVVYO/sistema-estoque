@@ -1,4 +1,4 @@
-// Entrada exclusiva do contêiner da demo. Não lê nem altera o .env do computador.
+// Inicializador da demo: contêiner isolado ou banco local criado por demo-mac.sh.
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -6,9 +6,13 @@ import { spawnSync, spawn } from 'node:child_process';
 
 const require = createRequire(new URL('../apps/api/package.json', import.meta.url));
 const { Client } = require('pg');
-const databaseUrl = 'postgresql://demo:demo@postgres:5432/lavanderia_demo';
-if (process.env.DATABASE_URL !== databaseUrl) {
-  throw new Error('Este inicializador aceita somente o banco isolado do compose.demo.yml.');
+const mac = process.env.LAUNDRY_DEMO_MAC === '1';
+const databaseUrl = mac ? process.env.DATABASE_URL : 'postgresql://demo:demo@postgres:5432/lavanderia_demo';
+const database = new URL(databaseUrl ?? 'file:///');
+if (mac ? !(database.protocol === 'postgresql:' && database.hostname === '127.0.0.1'
+  && database.port === '55439' && database.pathname === '/lavanderia_demo' && database.username === 'demo')
+  : process.env.DATABASE_URL !== databaseUrl) {
+  throw new Error('Este inicializador aceita somente o banco isolado da demo (Docker ou demo-mac.sh).');
 }
 
 const settings = {
@@ -16,14 +20,15 @@ const settings = {
   API_PORT: '3000',
   WEB_ORIGIN: 'http://localhost:5173',
   VITE_API_URL: '/api',
-  JWT_SECRET: randomBytes(32).toString('hex'),
+  JWT_SECRET: mac ? process.env.JWT_SECRET : randomBytes(32).toString('hex'),
   NODE_ENV: 'development',
   BACKUP_AUTO_ENABLED: 'false',
   SEED_ADMIN_EMAIL: 'demo@lavanderia.local',
   SEED_ADMIN_PASSWORD: 'LavanderiaDemo123!',
 };
 Object.assign(process.env, settings);
-writeFileSync(new URL('../.env', import.meta.url),
+if (!settings.JWT_SECRET || settings.JWT_SECRET.length < 32) throw new Error('JWT_SECRET da demo ausente.');
+if (!mac) writeFileSync(new URL('../.env', import.meta.url),
   Object.entries(settings).map(([key, value]) => `${key}=${value}`).join('\n') + '\n',
   { mode: 0o600 });
 
@@ -57,7 +62,7 @@ console.info('\nDemo: http://localhost:5173');
 console.info(`Login: ${settings.SEED_ADMIN_EMAIL} | Senha: ${settings.SEED_ADMIN_PASSWORD}\n`);
 const app = spawn('pnpm', ['exec', 'concurrently', '--kill-others', '-n', 'api,web',
   'pnpm --filter @stock/api start',
-  'pnpm --filter @stock/web exec vite preview --host 0.0.0.0 --port 5173 --strictPort'],
+  `pnpm --filter @stock/web exec vite preview --host ${mac ? '127.0.0.1' : '0.0.0.0'} --port 5173 --strictPort`],
   { stdio: 'inherit' });
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => app.kill(signal));

@@ -9,3 +9,4 @@ apps/api/src/generated/
 .DS_Store
 /var/backups/
 /tmp/
+/.demo-mac/
