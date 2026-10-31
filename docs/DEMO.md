@@ -2,6 +2,53 @@
 
 Demonstração presencial, rodando no notebook. Dados fictícios de uma lavanderia industrial que vende e aluga EPI: 19 produtos, 6 clientes, 2 fornecedores, ~60 dias de movimentações e pedidos de compra. Os 3 produtos genéricos do seed base (cabo USB-C, caixa organizadora, fita para embalagem) ficam inativos e com o movimento inicial 60 dias atrás, fora do total e da atividade recente.
 
+## Rodar com um comando (pacote para compartilhar)
+
+Instale e abra o Docker Desktop com Docker Compose v2. Para obter pelo Git:
+
+```sh
+git clone -b demo-lavanderia --single-branch https://github.com/GAVVYO/sistema-estoque.git
+cd sistema-estoque
+```
+
+Se recebeu o pacote `lavanderia-demo.zip`, extraia e abra o terminal dentro da
+pasta `lavanderia-demo`. Na pasta do projeto, execute:
+
+```sh
+docker compose -f compose.demo.yml up --build
+```
+
+Na primeira execução precisa de internet para baixar as imagens e dependências.
+Quando a API e o frontend estiverem prontos, abra **http://localhost:5173**.
+
+- E-mail: `demo@lavanderia.local`
+- Senha: `LavanderiaDemo123!`
+
+O comando instala Node/pnpm dentro do contêiner, compila o projeto, aplica as
+migrations e prepara a lavanderia somente na primeira inicialização. Não precisa
+instalar Node/PostgreSQL ou preencher `.env` no computador. O banco fica em um
+volume exclusivo `gavyo-lavanderia-demo_demo_database`, sem
+publicar a porta do PostgreSQL; a aplicação atende somente no próprio computador.
+Backups automáticos ficam desligados; ferramentas de backup e upload de imagens
+não são configurados neste pacote de demonstração.
+
+Para parar, pressione **Ctrl+C**. Para voltar, execute o mesmo comando; os dados
+continuam salvos. Para encerrar e remover apenas os contêineres:
+
+```sh
+docker compose -f compose.demo.yml down
+```
+
+Se a primeira preparação for interrompida após criar o usuário, o inicializador
+recusa continuar com dados incompletos. Somente para **apagar toda esta demo** e
+preparar novamente, execute `docker compose -f compose.demo.yml down -v` e depois
+o comando de início. Não use `pnpm demo:reset` para este pacote: esse comando
+antigo pertence ao outro Compose.
+
+Estas credenciais são públicas e exclusivas dos dados fictícios da demo local.
+O pacote deve conter os arquivos `compose.demo.yml`, `Dockerfile.demo` e
+`scripts/start-demo.mjs`; eles precisam acompanhar o código ao compartilhar.
+
 ## 1. Preparar (uma vez, na véspera)
 
 Pré-requisitos: Docker rodando, Node 22, pnpm.

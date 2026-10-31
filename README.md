@@ -1,5 +1,9 @@
 # Sistema de Estoque V2
 
+**Branch `demo-lavanderia`:** para iniciar a demonstração com um comando usando
+Docker, siga [INICIAR-DEMO.md](INICIAR-DEMO.md). Inclui banco isolado e dados
+fictícios de lavanderia, sem configurar Node ou `.env` no computador.
+
 Esta branch é uma reimplementação progressiva do sistema de estoque. A aplicação PHP/MySQL original permanece na branch `master` como referência funcional enquanto a V2 amadurece. Auth, categorias, produtos, inventário, histórico e painel estão integrados à API PostgreSQL. O frontend não possui fallback de dados fictícios. A validação com banco real ainda está pendente nesta máquina; leia `docs/OPERATIONAL_INTEGRATION.md` para retomar com segurança.
 
 ## Arquitetura

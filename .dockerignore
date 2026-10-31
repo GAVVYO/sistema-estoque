@@ -1,0 +1,14 @@
+.git
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.env
+.env.*
+!.env.example
+apps/api/src/generated
+artifacts
+output
+var
+tmp
+*.zip
+.DS_Store
