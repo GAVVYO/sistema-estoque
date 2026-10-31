@@ -6,14 +6,15 @@ if [[ "$(uname -s)" != Darwin ]]; then
   exit 1
 fi
 version="$(sw_vers -productVersion)"
-if (( ${version%%.*} < 12 )); then
-  echo "macOS $version: as dependências atuais exigem macOS 12 ou posterior." >&2
-  echo 'Nada foi instalado. Alternativa pelo navegador: docs/DEMO.md → Codespaces.' >&2
+if (( ${version%%.*} < 11 )); then
+  echo "macOS $version: este inicializador exige macOS 11 ou posterior." >&2
   exit 1
 fi
 
 cd "$(dirname "$0")/.."
 project_dir="$PWD"
+state="$project_dir/.demo-mac"
+legacy=false
 if [[ -e .env ]]; then
   echo 'Use uma clonagem exclusiva para esta demo, sem .env existente.' >&2
   echo 'Nenhuma configuração existente foi alterada.' >&2
@@ -21,6 +22,10 @@ if [[ -e .env ]]; then
 fi
 
 echo "Preparando lavanderia demo no macOS $version."
+if (( ${version%%.*} == 11 )); then
+  legacy=true
+  source scripts/prepare-macos11.sh
+else
 if ! command -v brew >/dev/null; then
   for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
     if [[ -x "$candidate" ]]; then
@@ -46,15 +51,29 @@ for formula in node@22 postgresql@17; do
 done
 node_prefix="$(brew --prefix node@22)"
 pg_prefix="$(brew --prefix postgresql@17)"
+fi
 export PATH="$node_prefix/bin:$pg_prefix/bin:$PATH"
 node -e 'if (Number(process.versions.node.split(".")[0]) !== 22) process.exit(1)'
 
-state="$project_dir/.demo-mac"
 mkdir -p "$state/bin"
 chmod 700 "$state"
 corepack enable --install-directory "$state/bin"
 export PATH="$state/bin:$PATH"
-pnpm install --frozen-lockfile
+if [[ "$legacy" == true ]]; then
+  pnpm install --frozen-lockfile --ignore-scripts
+  # O pacote atual não inclui binário de Argon2 para Mac Intel.
+  if ! node -e "require(require('node:module').createRequire(process.cwd()+'/apps/api/package.json').resolve('argon2'))" >/dev/null 2>&1; then
+    argon_dir="$(node -e "console.log(require('node:path').dirname(require('node:module').createRequire(process.cwd()+'/apps/api/package.json').resolve('argon2')))")"
+    node_gyp="$(npm root -g)/npm/node_modules/node-gyp/bin/node-gyp.js"
+    if [[ ! -f "$node_gyp" ]]; then
+      echo 'Não foi encontrado o node-gyp distribuído com o npm. Reinstale o Node 22 com npm.' >&2
+      exit 1
+    fi
+    node "$node_gyp" rebuild --directory "$argon_dir"
+  fi
+else
+  pnpm install --frozen-lockfile
+fi
 
 for secret in pg-password jwt-secret; do
   if [[ ! -f "$state/$secret" ]]; then

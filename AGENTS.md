@@ -1,5 +1,16 @@
 # Sistema de Estoque V2 — guia para continuar o projeto
 
+**Demo no Mac — 31/10/2026:** checkout atual `/Users/felipe/sistema-estoque`,
+remoto `GAVVYO/sistema-estoque`, branch `demo-lavanderia`. No macOS 11.7.11
+Intel, usar `bash scripts/demo-mac.sh`: Node 22 existente, esbuild-wasm da
+mesma versão 0.28.2, Argon2 compilado e PostgreSQL 17.11 local compilado.
+Guia e validação em `docs/DEMO_MAC.md`. Banco exclusivo em `.demo-mac/pgdata`,
+porta loopback 55439; web em `http://localhost:5173`. Não apagar essa pasta
+para reiniciar; ela contém os dados da demo e os segredos locais. Migrations,
+seed e demo foram executados somente nesse banco novo. Build, lint, tipos,
+testes, health e login/catálogo no navegador passaram. O modo Docker continua
+disponível; execução completa do Docker não foi validada nesta máquina.
+
 **Clientes/vendas — 23/10/2026:** consultar `docs/CLIENTES_V1.md`. Migration aditiva de clientes/snapshots aplicada após backup e QA isolado; POST público de movimentação exige requestId e, em EXIT/SALE, comprador identificado ou escolha anônima explícita. Não reinterpretar legado nem reescrever snapshots ao editar cadastro. ADMIN/MANAGER gerenciam; OPERATOR lê/cria. Publicar código/migration juntos. Evidências em `artifacts/customers-sales-20261023/REVIEW.md`.
 
 **Formulários de produto — 23/10/2026:** o usuário aprovou a **proposta B**, substituindo a composição histórica da seção 8: identificação, estoque e preços na coluna principal; foto e detalhes opcionais na lateral. No celular, os campos operacionais vêm primeiro. Edição tem cabeçalho com identidade, situação e saldo atual. Foco inicial em Nome; Tab segue a ordem visual; Enter no barcode continua em Nome e Enter no SKU em Categoria. Preservar RHF/Zod, contratos da API, unidade bloqueada, saldo somente leitura, proteção de rascunho e fluxo de imagem. Estilos específicos em `apps/web/src/product-form.css`; evidências em `artifacts/product-form-implementation-20261023/REVIEW.md`.

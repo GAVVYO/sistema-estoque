@@ -13,10 +13,18 @@ bash scripts/demo-mac.sh
 O comando identifica a versão do macOS, instala Homebrew se necessário (pode
 pedir a senha do Mac), instala Node 22 e PostgreSQL 17 quando ausentes, prepara
 as dependências e inicia a demo. Não inicia serviço de banco no login do Mac.
-Requer internet na primeira preparação. O Homebrew pode não oferecer suporte
-ao sistema/hardware antigo: [requisitos oficiais](https://docs.brew.sh/Installation).
-No macOS 11 ou anterior, o comando para antes de instalar: uma dependência
-atual do projeto exige macOS 12 ou posterior.
+Requer internet na primeira preparação. No macOS 12 ou posterior, o Homebrew
+pode não oferecer suporte ao sistema/hardware antigo:
+[requisitos oficiais](https://docs.brew.sh/Installation).
+
+No **macOS 11 Intel**, o comando usa uma adaptação local: esbuild 0.28.2 em
+WebAssembly, PostgreSQL 17.11 compilado a partir do código oficial (checksum
+SHA-256 conferido) e Argon2 compilado para o Mac. Esse caminho requer **Node 22
+com npm e Corepack** e **Command Line Tools da Apple** já instalados. As
+ferramentas ficam em `.demo-mac/`, sem instalar serviços ou alterar o Homebrew.
+A primeira compilação do banco demora alguns minutos; logs em
+`.demo-mac/postgres-configure.log` e `.demo-mac/postgres-build.log`.
+macOS anterior ao 11 e macOS 11 ARM não estão cobertos por essa adaptação.
 
 Use uma clonagem exclusiva da demo, sem `.env`. Os dados ficam em `.demo-mac/`,
 ignorada pelo Git, e continuam salvos nas próximas execuções. O PostgreSQL da
@@ -29,8 +37,10 @@ Abra **http://localhost:5173**. Login: `demo@lavanderia.local`; senha:
 Se a preparação dos dados for interrompida, não apague pastas automaticamente:
 consulte a mensagem e preserve `.demo-mac/` antes de refazer a demo.
 
-O instalador foi validado quanto à sintaxe e ao bloqueio de macOS 11; a
-instalação e execução completas ainda precisam ser testadas em um Mac compatível.
+O caminho de macOS 11 Intel teve compilação da aplicação, lint e tipos
+verificados nesta máquina. Consulte [docs/DEMO_MAC.md](docs/DEMO_MAC.md) para
+detalhes da validação local. O instalador via Homebrew em outros Macs ainda
+precisa ser validado nesses sistemas.
 
 ## Com Docker
 
@@ -63,7 +73,6 @@ estiver usando essa porta antes de iniciar.
 
 Roteiro de apresentação e recuperação: [docs/DEMO.md](docs/DEMO.md).
 
-Validação deste pacote: lint, checagem de tipos, YAML e sintaxe do inicializador
-passaram. O build local foi impedido por uma dependência que exige macOS 12 ou
-posterior (esta máquina usa macOS 11). A execução completa no Docker ainda
-precisa ser conferida em uma máquina com Docker disponível.
+Validação do Compose: YAML e sintaxe do inicializador passaram. A execução
+completa no Docker ainda precisa ser conferida em uma máquina com Docker
+disponível. A compilação local passou com a adaptação para macOS 11 acima.
