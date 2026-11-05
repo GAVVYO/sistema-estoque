@@ -9,7 +9,7 @@ import { ImagesService } from './images.service';
 import { CloudinaryStorage } from './cloudinary-storage';
 
 const connection=process.env.IMAGES_TEST_DATABASE_URL;
-describe('managed image lifecycle in isolated PostgreSQL',{skip:!connection},()=>{
+describe('managed image lifecycle in isolated MySQL',{skip:!connection},()=>{
   let db:PrismaService, inventory:InventoryService;
   const run=randomUUID(),owner=randomUUID(),other=randomUUID(),category=randomUUID();
   const imageIds:string[]=[],productIds:string[]=[];

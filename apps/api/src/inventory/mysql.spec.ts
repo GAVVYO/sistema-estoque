@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Client } from 'pg';
+import { Client } from '../prisma/mysql-test-client';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -19,7 +19,7 @@ import { InventoryModule } from './inventory.module';
 // migrations to a separate test database first. No reset, drop or general cleanup.
 // This suite keeps its audit trail and deactivates only its own UUID fixtures.
 const testUrl = process.env.TEST_DATABASE_URL;
-describe('real PostgreSQL operational flow and concurrent exits', { skip: !testUrl, concurrency: false }, () => {
+describe('real MySQL operational flow and concurrent exits', { skip: !testUrl, concurrency: false }, () => {
   let app: INestApplication, db: PrismaService, base: string, cookie: string;
   let baseline: DashboardSummary;
   const tag = 'test-' + randomUUID();
@@ -70,7 +70,7 @@ describe('real PostgreSQL operational flow and concurrent exits', { skip: !testU
     return fetch(base + path, { method, headers: { Origin: origin, 'Content-Type': 'application/json', ...(session ? { Cookie: session } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
   }
   async function concurrentExits(productId: string, quantity: string, count: number) {
-    // Hold the row until both sessions are visibly waiting in PostgreSQL. This
+    // Hold the row until both sessions are visibly waiting in MySQL. This
     // proves lock contention instead of relying on the timing of Promise.all.
     const blocker = new Client({ connectionString: testUrl });
     await blocker.connect();
@@ -78,13 +78,13 @@ describe('real PostgreSQL operational flow and concurrent exits', { skip: !testU
     let overlapping = false;
     try {
       await blocker.query('BEGIN');
-      await blocker.query('SELECT "id" FROM "Product" WHERE "id" = $1::uuid FOR UPDATE', [productId]);
+      await blocker.query('SELECT "id" FROM "Product" WHERE "id" = $1 FOR UPDATE', [productId]);
       pending = Promise.all(Array.from({ length: count }, (_, index) => request('/stock-movements', {
         productId, type: 'EXIT', reason: 'SALE', quantity,
       }, 'POST', index % 2 ? secondCookie : cookie)));
       const deadline = Date.now() + 3000;
       while (Date.now() < deadline) {
-        const [{ waiting }] = await db.$queryRaw<{ waiting: bigint }[]>`SELECT COUNT(*) AS waiting FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%'`;
+        const { rows: [{ waiting }] } = await blocker.query('SELECT count(*) AS waiting FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE l.OBJECT_SCHEMA=DATABASE()');
         if (Number(waiting) >= 2) { overlapping = true; break; }
         await delay(10);
       }
@@ -287,14 +287,14 @@ describe('real PostgreSQL operational flow and concurrent exits', { skip: !testU
       async function waitForLocks(count: number) {
         const deadline = Date.now() + 5000;
         while (Date.now() < deadline) {
-          const [{ waiting }] = await db.$queryRaw<{ waiting: bigint }[]>`SELECT COUNT(*) AS waiting FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%'`;
+          const { rows: [{ waiting }] } = await blocker.query('SELECT count(*) AS waiting FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE l.OBJECT_SCHEMA=DATABASE()');
           if (Number(waiting) >= count) return;
           await delay(10);
         }
         assert.fail('Expected requests waiting for the product lock');
       }
       try {
-        await blocker.query('BEGIN'); await blocker.query('SELECT "id" FROM "Product" WHERE "id"=$1::uuid FOR UPDATE', [product.id]);
+        await blocker.query('BEGIN'); await blocker.query('SELECT "id" FROM "Product" WHERE "id"=$1 FOR UPDATE', [product.id]);
         const startEntry = () => request('/stock-movements', { productId: product.id, type: 'ENTRY', reason: 'OTHER', quantity: '1' });
         const startPatch = () => request('/products/' + product.id, { unit: 'BOX' }, 'PATCH');
         if (entryFirst) entry = startEntry(); else patch = startPatch();

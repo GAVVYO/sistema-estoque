@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Client } from 'pg';
+import { Client } from '../prisma/mysql-test-client';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
@@ -19,7 +19,7 @@ type ReceiptResult = { receipt: ReceiptRecord; repeated: boolean };
 // Explicit opt-in, local dedicated database only. Retain the audit records;
 // deactivate only this suite's UUID fixtures, never reset or touch shared Neon.
 const url = process.env.TEST_PURCHASE_DATABASE_URL;
-describe('real PostgreSQL purchase integrity and simultaneous receipts', { skip: !url, concurrency: false }, () => {
+describe('real MySQL purchase integrity and simultaneous receipts', { skip: !url, concurrency: false }, () => {
   let app: INestApplication, db: PrismaService, base: string;
   const tag = 'purchase-qa-' + randomUUID(), origin = 'http://localhost:5173';
   const managers = [randomUUID(), randomUUID()], operator = randomUUID(), categoryId = randomUUID();
@@ -46,12 +46,12 @@ describe('real PostgreSQL purchase integrity and simultaneous receipts', { skip:
   async function competing(orderId: string, bodies: unknown[]) {
     const blocker = new Client({ connectionString: url }); await blocker.connect(); let pending: Promise<Response[]> | undefined, overlap = false;
     try {
-      await blocker.query('BEGIN'); await blocker.query('SELECT "id" FROM "PurchaseOrder" WHERE "id"=$1::uuid FOR UPDATE', [orderId]);
+      await blocker.query('BEGIN'); await blocker.query('SELECT "id" FROM "PurchaseOrder" WHERE "id"=$1 FOR UPDATE', [orderId]);
       pending = Promise.all(bodies.map((body, index) => send('/purchase-orders/' + orderId + '/receipts', body, 'POST', cookies[index % 2])));
       const deadline = Date.now() + 4000;
-      while (Date.now() < deadline) { const [{ waiting }] = await db.$queryRaw<{ waiting: bigint }[]>`SELECT count(*) AS waiting FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'`; if (Number(waiting) >= 2) { overlap = true; break; } await delay(10); }
+      while (Date.now() < deadline) { const [{ waiting }] = await db.$queryRaw<{ waiting: bigint }[]>`SELECT count(*) AS waiting FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE l.OBJECT_SCHEMA=DATABASE()`; if (Number(waiting) >= 2) { overlap = true; break; } await delay(10); }
     } finally { await blocker.query('ROLLBACK'); await blocker.end(); }
-    const results = await pending!; assert(overlap, 'Two HTTP sessions must actually overlap on PostgreSQL locks'); return results;
+    const results = await pending!; assert(overlap, 'Two HTTP sessions must actually overlap on MySQL locks'); return results;
   }
   test('supplier CRUD, format normalization, uniqueness, pagination and read-only operator', async () => {
     assert.equal((await send('/suppliers', { name: 'Duplicate', document: '123.456.789-01' })).status, 409);
@@ -127,7 +127,7 @@ describe('real PostgreSQL purchase integrity and simultaneous receipts', { skip:
     const record = await sent(item.id);
     assert.equal((await send('/purchase-orders/' + record.id + '/receipts', { receiptId: randomUUID(), items: [{ orderItemId: randomUUID(), quantity: '1' }] })).status, 400);
     assert.equal((await send('/purchase-orders/' + record.id + '/receipts', { receiptId: randomUUID(), items: [{ orderItemId: record.items[0].id, quantity: '1' }] }, 'POST', cookies[2])).status, 403);
-    await assert.rejects(db.$executeRaw`UPDATE "PurchaseOrderItem" SET "received"="quantity"+1 WHERE "id"=${record.items[0].id}::uuid`);
+    await assert.rejects(db.$executeRaw`UPDATE "PurchaseOrderItem" SET "received"="quantity"+1 WHERE "id"=${record.items[0].id}`);
     assert.equal((await db.purchaseOrderItem.findUniqueOrThrow({ where: { id: record.items[0].id } })).received.toString(), '0');
     await db.product.update({ where: { id: item.id }, data: { unit: 'UNIT' } });
     assert.equal((await send('/purchase-orders/' + record.id + '/receipts', { receiptId: randomUUID(), items: [{ orderItemId: record.items[0].id, quantity: '1' }] })).status, 409);

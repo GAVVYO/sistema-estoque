@@ -17,7 +17,7 @@ import { HttpExceptionFilter } from '../common/http-exception.filter';
 
 // Opt-in only: never load DATABASE_URL from a developer's .env for these writes.
 const connection = process.env.TEST_IMPORT_DATABASE_URL;
-test('PostgreSQL: atomic import, concurrency, revalidation, audit and authenticated HTTP', { skip: !connection }, async t => {
+test('MySQL: atomic import, concurrency, revalidation, audit and authenticated HTTP', { skip: !connection }, async t => {
   const url = new URL(connection!);
   assert(['127.0.0.1', 'localhost'].includes(url.hostname) && url.pathname.endsWith('_import_test'), 'Use a dedicated loopback database ending in _import_test.');
   const db = new PrismaService(new ConfigService({ DATABASE_URL: connection }));

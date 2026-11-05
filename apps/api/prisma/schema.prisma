@@ -5,7 +5,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
 }
 
 enum UserRole {
@@ -44,7 +44,7 @@ enum MovementReason {
 }
 
 model User {
-  id               String            @id @default(uuid()) @db.Uuid
+  id               String            @id @default(uuid()) @db.Char(36)
   name             String            @db.VarChar(120)
   email            String            @unique @db.VarChar(180)
   passwordHash     String            @db.VarChar(255)
@@ -63,7 +63,7 @@ model User {
 }
 
 model Category {
-  id          String    @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid()) @db.Char(36)
   name        String    @unique @db.VarChar(120)
   description String?   @db.VarChar(500)
   active      Boolean   @default(true)
@@ -74,13 +74,13 @@ model Category {
 }
 
 model Product {
-  id             String              @id @default(uuid()) @db.Uuid
+  id             String              @id @default(uuid()) @db.Char(36)
   sku            String              @unique @db.VarChar(80)
   barcode        String?             @unique @db.VarChar(80)
   name           String              @db.VarChar(200)
   description    String?             @db.Text
-  categoryId     String              @db.Uuid
-  category       Category            @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  categoryId     String              @db.Char(36)
+  category       Category            @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   unit           ProductUnit         @default(UNIT)
   imageUrl       String?             @db.VarChar(2048)
   costPrice      Decimal?            @db.Decimal(18, 2)
@@ -105,7 +105,7 @@ enum BuyerIdentification {
 }
 
 model Customer {
-  id        String @id @default(uuid()) @db.Uuid
+  id        String @id @default(uuid()) @db.Char(36)
   code      String @unique @db.VarChar(40)
   name      String @db.VarChar(120)
   active    Boolean @default(true)
@@ -117,11 +117,11 @@ model Customer {
 }
 
 model StockMovement {
-  id             String               @id @default(uuid()) @db.Uuid
-  productId      String               @db.Uuid
-  product        Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
-  userId         String               @db.Uuid
-  user           User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  id             String               @id @default(uuid()) @db.Char(36)
+  productId      String               @db.Char(36)
+  product        Product              @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  userId         String               @db.Char(36)
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   type           MovementType
   quantity       Decimal              @db.Decimal(18, 3)
   previousStock  Decimal              @db.Decimal(18, 3)
@@ -131,12 +131,12 @@ model StockMovement {
   notes          String?              @db.Text
   createdAt      DateTime             @default(now())
   receiptItem    PurchaseReceiptItem?
-  customerId     String? @db.Uuid
-  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customerId     String? @db.Char(36)
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   buyerIdentification BuyerIdentification?
   customerNameSnapshot String? @db.VarChar(120)
   customerCodeSnapshot String? @db.VarChar(40)
-  requestId      String? @db.Uuid
+  requestId      String? @db.Char(36)
   requestHash    String? @db.VarChar(64)
 
   @@unique([userId, requestId])
@@ -154,10 +154,10 @@ enum ProductImageState {
 
 // Remote storage IDs stay server-side; products retain their existing URL contract.
 model ProductImage {
-  id        String            @id @default(uuid()) @db.Uuid
-  ownerId   String            @db.Uuid
+  id        String            @id @default(uuid()) @db.Char(36)
+  ownerId   String            @db.Char(36)
   publicId  String            @unique @db.VarChar(200)
-  url       String?           @unique @db.VarChar(2048)
+  url       String?           @db.VarChar(2048)
   state     ProductImageState @default(PENDING)
   createdAt DateTime          @default(now())
   expiresAt DateTime?
@@ -174,7 +174,7 @@ enum PurchaseStatus {
 }
 
 model Supplier {
-  id        String          @id @default(uuid()) @db.Uuid
+  id        String          @id @default(uuid()) @db.Char(36)
   name      String          @db.VarChar(200)
   tradeName String?         @db.VarChar(200)
   document  String?         @unique @db.VarChar(14)
@@ -193,14 +193,14 @@ model Supplier {
 }
 
 model PurchaseOrder {
-  id               String              @id @default(uuid()) @db.Uuid
+  id               String              @id @default(uuid()) @db.Char(36)
   number           Int                 @unique @default(autoincrement())
-  supplierId       String              @db.Uuid
-  supplier         Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplierId       String              @db.Char(36)
+  supplier         Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   supplierName     String              @db.VarChar(200)
   supplierDocument String?             @db.VarChar(14)
-  createdBy        String              @db.Uuid
-  creator          User                @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  createdBy        String              @db.Char(36)
+  creator          User                @relation(fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   status           PurchaseStatus      @default(DRAFT)
   revision         Int                 @default(1)
   notes            String?             @db.VarChar(5000)
@@ -217,11 +217,11 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id           String                @id @default(uuid()) @db.Uuid
-  orderId      String                @db.Uuid
-  order        PurchaseOrder         @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  productId    String                @db.Uuid
-  product      Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  id           String                @id @default(uuid()) @db.Char(36)
+  orderId      String                @db.Char(36)
+  order        PurchaseOrder         @relation(fields: [orderId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  productId    String                @db.Char(36)
+  product      Product               @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   productName  String                @db.VarChar(200)
   sku          String                @db.VarChar(80)
   unit         ProductUnit
@@ -235,11 +235,11 @@ model PurchaseOrderItem {
 }
 
 model PurchaseReceipt {
-  id          String                @id @db.Uuid
-  orderId     String                @db.Uuid
-  order       PurchaseOrder         @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  createdBy   String                @db.Uuid
-  creator     User                  @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  id          String                @id @db.Char(36)
+  orderId     String                @db.Char(36)
+  order       PurchaseOrder         @relation(fields: [orderId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy   String                @db.Char(36)
+  creator     User                  @relation(fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   requestHash String                @db.VarChar(64)
   notes       String?               @db.VarChar(5000)
   createdAt   DateTime              @default(now())
@@ -249,14 +249,14 @@ model PurchaseReceipt {
 }
 
 model PurchaseReceiptItem {
-  id          String            @id @default(uuid()) @db.Uuid
-  receiptId   String            @db.Uuid
-  receipt     PurchaseReceipt   @relation(fields: [receiptId], references: [id], onDelete: Restrict)
-  orderItemId String            @db.Uuid
-  orderItem   PurchaseOrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  id          String            @id @default(uuid()) @db.Char(36)
+  receiptId   String            @db.Char(36)
+  receipt     PurchaseReceipt   @relation(fields: [receiptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  orderItemId String            @db.Char(36)
+  orderItem   PurchaseOrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   quantity    Decimal           @db.Decimal(18, 3)
-  movementId  String            @unique @db.Uuid
-  movement    StockMovement     @relation(fields: [movementId], references: [id], onDelete: Restrict)
+  movementId  String            @unique @db.Char(36)
+  movement    StockMovement     @relation(fields: [movementId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([receiptId, orderItemId])
 }
@@ -269,10 +269,10 @@ enum ImportStatus {
 }
 
 model ImportJob {
-  id               String       @id @default(uuid()) @db.Uuid
+  id               String       @id @default(uuid()) @db.Char(36)
   status           ImportStatus @default(PREVIEW)
-  createdBy        String       @db.Uuid
-  creator          User         @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  createdBy        String       @db.Char(36)
+  creator          User         @relation(fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   fileName         String       @db.VarChar(255)
   format           String       @db.VarChar(4)
   delimiter        String?      @db.VarChar(1)
@@ -300,19 +300,19 @@ enum PhysicalInventoryStatus {
 }
 
 model PhysicalInventory {
-  id                String @id @default(uuid()) @db.Uuid
+  id                String @id @default(uuid()) @db.Char(36)
   title             String @db.VarChar(160)
   status            PhysicalInventoryStatus @default(DRAFT)
   revision          Int @default(1)
-  categoryId        String? @db.Uuid
-  category          Category? @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  categoryId        String? @db.Char(36)
+  category          Category? @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   categoryName      String? @db.VarChar(120)
-  createdById       String @db.Uuid
-  createdBy         User @relation("InventoryCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  completedById     String? @db.Uuid
-  completedBy       User? @relation("InventoryCompleter", fields: [completedById], references: [id], onDelete: Restrict)
-  cancelledById     String? @db.Uuid
-  cancelledBy       User? @relation("InventoryCanceller", fields: [cancelledById], references: [id], onDelete: Restrict)
+  createdById       String @db.Char(36)
+  createdBy         User @relation("InventoryCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  completedById     String? @db.Char(36)
+  completedBy       User? @relation("InventoryCompleter", fields: [completedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cancelledById     String? @db.Char(36)
+  cancelledBy       User? @relation("InventoryCanceller", fields: [cancelledById], references: [id], onDelete: Restrict, onUpdate: Restrict)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   completedAt       DateTime?
@@ -326,10 +326,10 @@ model PhysicalInventory {
 }
 
 model PhysicalInventoryItem {
-  inventoryId           String @db.Uuid
-  inventory             PhysicalInventory @relation(fields: [inventoryId], references: [id], onDelete: Restrict)
-  productId             String @db.Uuid
-  product               Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  inventoryId           String @db.Char(36)
+  inventory             PhysicalInventory @relation(fields: [inventoryId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  productId             String @db.Char(36)
+  product               Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   sku                   String @db.VarChar(80)
   name                  String @db.VarChar(200)
   unit                  ProductUnit
@@ -338,10 +338,17 @@ model PhysicalInventoryItem {
   snapshotMovementCount Int
   countedQuantity       Decimal? @db.Decimal(18,3)
   notes                 String? @db.VarChar(1000)
-  countedById           String? @db.Uuid
-  countedBy             User? @relation(fields: [countedById], references: [id], onDelete: Restrict)
+  countedById           String? @db.Char(36)
+  countedBy             User? @relation(fields: [countedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
   countedAt             DateTime?
 
   @@id([inventoryId, productId])
   @@index([productId])
+}
+
+
+// Transactional serialization keys. Rows are retained so every retry locks the
+// same InnoDB record, including the first concurrent request for a new UUID.
+model OperationLock {
+  key String @id @db.VarChar(120)
 }

@@ -36,9 +36,9 @@ describe('Decimal inventory arithmetic', () => {
   });
 });
 
-// Only HTTP/validation/auth boundaries are stubbed here. PostgreSQL behavior has
+// Only HTTP/validation/auth boundaries are stubbed here. MySQL behavior has
 // a separate opt-in suite; these tests cannot prove row locks or DB rollback.
-describe('operational HTTP boundaries without PostgreSQL', () => {
+describe('operational HTTP boundaries without MySQL', () => {
   const id = '957333d6-2822-449e-81f3-454f2a90be2f';
   const actor = 'd5742179-1503-444f-9eaa-88d38a148144';
   const origin = 'http://localhost:5173';

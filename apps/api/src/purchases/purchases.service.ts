@@ -1,3 +1,6 @@
+import { matchingIds } from '../prisma/search';
+import { writeTransaction } from '../prisma/transactions';
+import { lockOperation } from '../prisma/transactions';
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { hasPermission, type Permission } from '@stock/shared';
@@ -20,13 +23,16 @@ function positive(value: string) { const amount = new Prisma.Decimal(value); if 
 export class PurchasesService {
   constructor(@Inject(PrismaService) private readonly db: PrismaService, @Inject(InventoryService) private readonly inventory: InventoryService) {}
   private async authorize(tx: Prisma.TransactionClient, userId: string, permission: Permission) {
-    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} LOCK IN SHARE MODE`;
     const user = await tx.user.findUnique({ where: { id: userId } });
     if (!user?.active || !hasPermission(user.role, permission)) throw new ForbiddenException('Você não tem permissão para esta ação.');
   }
   async suppliers(query: SupplierQuery) {
     const where: Prisma.SupplierWhereInput = { active: query.active === 'all' ? undefined : query.active !== 'false' };
-    if (query.search?.trim()) where.OR = ['name', 'tradeName', 'document', 'email', 'contact'].map(field => ({ [field]: { contains: field === 'document' ? query.search!.replace(/[.\-/\s]/g, '').toUpperCase() : query.search!.trim(), mode: 'insensitive' } }));
+    if (query.search?.trim()) where.id = { in: [...new Set([
+      ...await matchingIds(this.db, 'Supplier', ['name', 'tradeName', 'email', 'contact'], query.search.trim()),
+      ...await matchingIds(this.db, 'Supplier', ['document'], query.search.replace(/[.\-/\s]/g, '')),
+    ])] };
     const [items, total, active, inactive] = await this.db.$transaction([
       this.db.supplier.findMany({ where, orderBy: [{ name: 'asc' }, { id: 'asc' }], skip: (query.page - 1) * query.limit, take: query.limit }),
       this.db.supplier.count({ where }), this.db.supplier.count({ where: { active: true } }), this.db.supplier.count({ where: { active: false } }),
@@ -40,9 +46,9 @@ export class PurchasesService {
   async saveSupplier(data: SupplierInput | SupplierPatch, userId: string, id?: string) {
     if (data.name === null || data.active === null) throw new BadRequestException('Nome e situação não podem ser nulos.');
     try {
-      return await this.db.$transaction(async tx => {
+      return await writeTransaction(this.db, async tx => {
         await this.authorize(tx, userId, 'supplier.manage');
-        if (id) { await tx.$queryRaw`SELECT "id" FROM "Supplier" WHERE "id" = ${id}::uuid FOR UPDATE`; if (!await tx.supplier.findUnique({ where: { id } })) throw new NotFoundException('Fornecedor não encontrado.'); }
+        if (id) { await tx.$queryRaw`SELECT "id" FROM "Supplier" WHERE "id" = ${id} FOR UPDATE`; if (!await tx.supplier.findUnique({ where: { id } })) throw new NotFoundException('Fornecedor não encontrado.'); }
         return id ? tx.supplier.update({ where: { id }, data }) : tx.supplier.create({ data: data as SupplierInput });
       });
     } catch (error) {
@@ -54,7 +60,8 @@ export class PurchasesService {
     const where: Prisma.PurchaseOrderWhereInput = { supplierId: query.supplierId, status: query.status };
     if (query.search?.trim()) {
       const search = query.search.trim(), number = Number(search.replace(/^PC-?/i, ''));
-      where.OR = [{ supplierName: { contains: search, mode: 'insensitive' } }, { items: { some: { OR: [{ sku: { contains: search, mode: 'insensitive' } }, { productName: { contains: search, mode: 'insensitive' } }] } } }];
+      const itemIds = await matchingIds(this.db, 'PurchaseOrderItem', ['sku', 'productName'], search);
+      where.OR = [{ id: { in: await matchingIds(this.db, 'PurchaseOrder', ['supplierName'], search) } }, { items: { some: { id: { in: itemIds } } } }];
       if (Number.isSafeInteger(number) && number > 0 && number <= 2147483647) where.OR.push({ number });
     }
     const [items, total] = await this.db.$transaction([this.db.purchaseOrder.findMany({ where, include: orderInclude, orderBy: [{ [query.sortBy ?? 'createdAt']: query.sortDirection ?? 'desc' }, { id: 'asc' }], skip: (query.page - 1) * query.limit, take: query.limit }), this.db.purchaseOrder.count({ where })]);
@@ -62,17 +69,17 @@ export class PurchasesService {
   }
   async order(id: string) { const order = await this.db.purchaseOrder.findUnique({ where: { id }, include: orderInclude }); if (!order) throw new NotFoundException('Pedido não encontrado.'); return order; }
   private async lockOrder(tx: Prisma.TransactionClient, id: string) {
-    await tx.$queryRaw`SELECT "id" FROM "PurchaseOrder" WHERE "id" = ${id}::uuid FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "PurchaseOrder" WHERE "id" = ${id} FOR UPDATE`;
     const order = await tx.purchaseOrder.findUnique({ where: { id }, include: { items: true } });
     if (!order) throw new NotFoundException('Pedido não encontrado.'); return order;
   }
   private async prepare(tx: Prisma.TransactionClient, input: OrderInput) {
-    await tx.$queryRaw`SELECT "id" FROM "Supplier" WHERE "id" = ${input.supplierId}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT "id" FROM "Supplier" WHERE "id" = ${input.supplierId} LOCK IN SHARE MODE`;
     const supplier = await tx.supplier.findUnique({ where: { id: input.supplierId } });
     if (!supplier?.active) throw new BadRequestException('Selecione um fornecedor ativo.');
     unique(input.items.map(item => item.productId));
     const ids = input.items.map(item => item.productId).sort();
-    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Product" WHERE "id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))}) ORDER BY "id" FOR SHARE`);
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Product" WHERE "id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}`))}) ORDER BY "id" LOCK IN SHARE MODE`);
     const products = await tx.product.findMany({ where: { id: { in: ids }, active: true } });
     if (products.length !== ids.length) throw new BadRequestException('Selecione somente produtos ativos.');
     const items = input.items.map(item => {
@@ -88,7 +95,7 @@ export class PurchasesService {
     return { supplierId: supplier.id, supplierName: supplier.name, supplierDocument: supplier.document, total, notes: input.notes ?? null, items };
   }
   async saveOrder(input: OrderInput | OrderUpdate, userId: string, id?: string) {
-    return this.db.$transaction(async tx => {
+    return writeTransaction(this.db, async tx => {
       await this.authorize(tx, userId, 'purchase.manage');
       if (id) {
         const current = await this.lockOrder(tx, id);
@@ -104,7 +111,7 @@ export class PurchasesService {
     });
   }
   async transition(id: string, revision: number, action: 'send' | 'cancel', userId: string) {
-    return this.db.$transaction(async tx => {
+    return writeTransaction(this.db, async tx => {
       await this.authorize(tx, userId, 'purchase.manage');
       const order = await this.lockOrder(tx, id);
       if (order.revision !== revision) throw new ConflictException('O pedido foi atualizado por outra pessoa. Recarregue antes de continuar.');
@@ -126,10 +133,10 @@ export class PurchasesService {
     unique(input.items.map(item => item.orderItemId));
     input.items.forEach(item => positive(item.quantity));
     const requestHash = receiptHash(orderId, input);
-    return this.db.$transaction(async tx => {
+    return writeTransaction(this.db, async tx => {
       await this.authorize(tx, userId, 'purchase.receive');
       // Serialize a receipt ID globally, including collision with another order.
-      await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${input.receiptId}::text, 0))`;
+      await lockOperation(tx, 'receipt:' + input.receiptId);
       const order = await this.lockOrder(tx, orderId);
       const previous = await tx.purchaseReceipt.findUnique({ where: { id: input.receiptId }, include: receiptInclude });
       if (previous) {
@@ -146,7 +153,7 @@ export class PurchasesService {
       }).sort((a, b) => a.item.productId.localeCompare(b.item.productId));
       // Stable product lock order avoids deadlocks across multi-product receipts.
       const ids = entries.map(entry => entry.item.productId);
-      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Product" WHERE "id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))}) ORDER BY "id" FOR UPDATE`);
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Product" WHERE "id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}`))}) ORDER BY "id" FOR UPDATE`);
       const currentProducts = await tx.product.findMany({ where: { id: { in: ids } }, select: { id: true, unit: true } });
       if (entries.some(entry => currentProducts.find(product => product.id === entry.item.productId)?.unit !== entry.item.unit)) throw new ConflictException('A unidade de um produto mudou. Revise o pedido antes de continuar.');
       await tx.purchaseReceipt.create({ data: { id: input.receiptId, orderId, createdBy: userId, requestHash, notes: input.notes ?? null } });

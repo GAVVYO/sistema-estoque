@@ -1,3 +1,4 @@
+import { writeTransaction } from '../prisma/transactions';
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { canImportProducts, type ImportPreview, type ImportMapping, type ImportCategoryMapping, type ImportResult } from '@stock/shared';
@@ -30,7 +31,7 @@ export class ImportsService {
     const rows = job.rows as unknown as FileRow[], headers = job.headers as string[], mapping = job.mapping as ImportMapping;
     const codes = rows.map(row => ({ sku: row.cells[mapping.sku ?? -1]?.text.trim() ?? '', barcode: row.cells[mapping.barcode ?? -1]?.text.trim() ?? '' }));
     const categories = await tx.category.findMany({ select: { id: true, name: true, active: true } });
-    const existing = await tx.product.findMany({ where: { OR: [{ sku: { in: codes.map(c => c.sku), mode: 'insensitive' } }, { barcode: { in: codes.flatMap(c => c.barcode ? [c.barcode] : []) } }] }, select: { sku: true, barcode: true } });
+    const existing = await tx.$queryRaw<{ sku: string; barcode: string | null }[]>(Prisma.sql`SELECT "sku", "barcode" FROM "Product" WHERE LOWER("sku") IN (${Prisma.join(codes.map(c => c.sku.toLowerCase()))}) OR "barcode" IN (${Prisma.join(codes.flatMap(c => c.barcode ? [c.barcode] : []).length ? codes.flatMap(c => c.barcode ? [c.barcode] : []) : [''])})`);
     return validateImportRows(rows, headers, mapping, job.categoryMappings as unknown as ImportCategoryMapping[], categories, existing);
   }
   private async view(job: ImportJob): Promise<ImportPreview> {
@@ -43,8 +44,8 @@ export class ImportsService {
     const parsed = setupSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException('Revise o mapeamento de colunas e categorias.');
     const data = parsed.data;
-    const job = await this.db.$transaction(async tx => {
-      await tx.$queryRaw`SELECT "id" FROM "ImportJob" WHERE "id" = ${id}::uuid FOR UPDATE`;
+    const job = await writeTransaction(this.db, async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "ImportJob" WHERE "id" = ${id} FOR UPDATE`;
       const current = await this.owned(id, userId, tx);
       if (current.status === 'COMPLETED' || current.status === 'PROCESSING') throw new ConflictException('Esta importação não pode mais ser alterada.');
       if (current.revision !== data.revision) throw new ConflictException('A revisão mudou. Atualize a importação antes de continuar.');
@@ -57,10 +58,10 @@ export class ImportsService {
     if (!parsed.success) throw new BadRequestException('Atualize o preview antes de confirmar.');
     let started = false;
     try {
-      const completed = await this.db.$transaction(async tx => {
+      const completed = await writeTransaction(this.db, async tx => {
         // This lock is the idempotency boundary. Concurrent confirmations wait
         // and observe the committed result; no independent per-product requests.
-        await tx.$queryRaw`SELECT "id" FROM "ImportJob" WHERE "id" = ${id}::uuid FOR UPDATE`;
+        await tx.$queryRaw`SELECT "id" FROM "ImportJob" WHERE "id" = ${id} FOR UPDATE`;
         const job = await this.owned(id, userId, tx);
         const user = await tx.user.findUnique({ where: { id: userId } });
         if (!user?.active || !canImportProducts(user.role)) throw new ForbiddenException('Você não tem permissão para importar produtos.');
@@ -89,8 +90,8 @@ export class ImportsService {
         : 'A importação falhou e o lote inteiro foi revertido. Nenhum produto foi importado. Revise antes de tentar novamente.';
       // Failure is recorded only after rollback. Never replace a successful
       // result committed by another confirmation while this request was waiting.
-      const job = await this.db.$transaction(async tx => {
-        await tx.$queryRaw`SELECT "id" FROM "ImportJob" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      const job = await writeTransaction(this.db, async tx => {
+        await tx.$queryRaw`SELECT "id" FROM "ImportJob" WHERE "id" = ${id} FOR UPDATE`;
         const current = await this.owned(id, userId, tx);
         if (current.status === 'COMPLETED' || current.revision !== parsed.data.revision) return current;
         return tx.importJob.update({ where: { id }, data: { status: 'FAILED', error: message, importedRows: 0 } });

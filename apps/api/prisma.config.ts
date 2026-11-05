@@ -7,7 +7,7 @@ dotenv.config({ path: resolve(process.cwd(), '../../.env') });
 export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
-    path: 'prisma/migrations',
+    path: 'prisma/mysql-migrations',
     seed: 'tsx prisma/seed.ts',
   },
   datasource: {

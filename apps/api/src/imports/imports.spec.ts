@@ -114,7 +114,7 @@ test('category choices are explicit, grouped by case, and inactive targets are r
 });
 
 // Transactional memory fixture proves service boundaries/idempotency locally.
-// It does not substitute for the opt-in PostgreSQL rollback suite.
+// It does not substitute for the opt-in MySQL rollback suite.
 function fixture() {
   let state = { jobs: [] as ImportJob[], categories: structuredClone(categories), products: [] as { id: string; sku: string; barcode: string | null; categoryId: string; stock: string }[], movements: [] as Record<string, unknown>[], role: 'MANAGER', active: true };
   let queued: Promise<void> = Promise.resolve();
@@ -123,7 +123,7 @@ function fixture() {
     $executeRaw: async (query: Prisma.Sql) => { for (let i = 0; i < query.values.length; i += 2) state.products.find(p => p.id === query.values[i])!.stock = query.values[i + 1] as string; },
     user: { findUnique: async () => ({ role: state.role, active: state.active }) },
     category: { findMany: async () => state.categories, count: async ({ where }: { where: { id: { in: string[] }; active: boolean } }) => state.categories.filter(c => c.active && where.id.in.includes(c.id)).length, create: async ({ data }: { data: { name: string; active: boolean } }) => { const item = { id: randomUUID(), ...data }; state.categories.push(item); return item; } },
-    product: { findMany: async () => state.products, createMany: async ({ data }: { data: typeof state.products }) => { state.products.push(...data); } },
+    product: { update: async ({ where, data }: { where: { id: string }; data: { stock: string } }) => { state.products.find(p => p.id === where.id)!.stock = String(data.stock); }, findMany: async () => state.products, createMany: async ({ data }: { data: typeof state.products }) => { state.products.push(...data); } },
     stockMovement: { createMany: async ({ data }: { data: Record<string, unknown>[] }) => { state.movements.push(...data); } },
     importJob: {
       create: async ({ data }: { data: Partial<ImportJob> }) => { const job = { id: randomUUID(), status: 'PREVIEW', revision: 1, importedRows: 0, result: null, error: null, createdAt: new Date(), updatedAt: new Date(), ...data } as ImportJob; state.jobs.push(job); return job; },
