@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import { resolve } from 'node:path';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -9,9 +11,15 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/http-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const config = app.get(ConfigService);
 
+  if (process.env.SERVE_WEB === 'true') {
+    app.set('trust proxy', 1);
+    const web = resolve(__dirname, '../../web/dist');
+    app.useStaticAssets(web);
+    app.getHttpAdapter().getInstance().get(/^\/(?!api(?:\/|$)).*/, (_request: unknown, response: { sendFile(path: string): void }) => response.sendFile(resolve(web, 'index.html')));
+  }
   app.setGlobalPrefix('api');
   configureAuthHttp(app, config);
   app.enableShutdownHooks();

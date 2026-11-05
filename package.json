@@ -16,7 +16,13 @@
     "test": "pnpm -r --if-present test && pnpm --filter @stock/api exec tsx --test ../web/tests/*.test.mjs",
     "db:migrate": "pnpm --filter @stock/api db:migrate",
     "db:seed": "pnpm --filter @stock/api db:seed",
-    "db:generate": "pnpm --filter @stock/api db:generate"
+    "db:generate": "pnpm --filter @stock/api db:generate",
+    "start": "node apps/api/dist/main.js",
+    "backup:tick": "node apps/api/dist/tools/backup-tick.js",
+    "db:transfer": "node apps/api/dist/tools/transfer-database.js",
+    "db:preflight": "node apps/api/dist/tools/mysql-preflight.js",
+    "test:mysql": "node scripts/test-mysql.cjs",
+    "db:restore-test": "node apps/api/dist/tools/restore-mysql-test.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

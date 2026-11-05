@@ -1,3 +1,4 @@
+import { exportMysql, verifyMysqlArchive } from './mysql-archive';
 import { ConflictException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException, StreamableFile } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { constants } from 'node:fs';
@@ -5,14 +6,14 @@ import { chmod, mkdir, open, readdir, readFile, rename, rm } from 'node:fs/promi
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { resolve, join } from 'node:path';
-import { backupIdPattern, databaseEnvironment, recordSchema, replaceBackupMetadata, runTool, syncBackupArchive, scheduleSchema, scheduleWindow, type BackupRecord, type BackupSchedule } from './backup-model';
+import { backupIdPattern, recordSchema, replaceBackupMetadata, syncBackupArchive, scheduleSchema, scheduleWindow, type BackupRecord, type BackupSchedule } from './backup-model';
 
 @Injectable()
 export class BackupsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BackupsService.name);
   private readonly directory: string;
-  private readonly dumpTool: string;
-  private readonly restoreTool: string;
+  private readonly externalScheduler: boolean;
+  private readonly inline: boolean;
   private readonly connection: string;
   private readonly timeout: number;
   private readonly retention: number;
@@ -25,8 +26,8 @@ export class BackupsService implements OnModuleInit, OnModuleDestroy {
 
   constructor(@Inject(ConfigService) config: ConfigService) {
     this.directory = resolve(config.get<string>('BACKUP_DIRECTORY', '../../var/backups'));
-    this.dumpTool = config.get<string>('BACKUP_PG_DUMP_PATH', 'pg_dump');
-    this.restoreTool = config.get<string>('BACKUP_PG_RESTORE_PATH', 'pg_restore');
+    this.externalScheduler = config.get<string>('BACKUP_SCHEDULER_MODE', 'internal') === 'external';
+    this.inline = config.get<string>('BACKUP_EXECUTION_MODE', 'background') === 'inline';
     this.connection = config.get<string>('BACKUP_DATABASE_URL') || config.get<string>('DIRECT_URL') || config.getOrThrow<string>('DATABASE_URL');
     this.timeout = config.get<number>('BACKUP_TIMEOUT_SECONDS', 1800) * 1000;
     this.retention = config.get<number>('BACKUP_RETENTION_DAYS', 365);
@@ -51,6 +52,7 @@ export class BackupsService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
+    if (this.externalScheduler) return;
     this.timer = setInterval(() => { void this.tick().catch(() => this.logger.error('Não foi possível executar a agenda de backup.')); }, 60_000);
     this.timer.unref();
     void this.tick().catch(() => this.logger.error('Não foi possível executar a agenda de backup.'));
@@ -138,6 +140,7 @@ export class BackupsService implements OnModuleInit, OnModuleDestroy {
       catch { this.logger.error('A trava de backup não pôde ser removida. Revise o armazenamento antes de gerar outra cópia.'); }
       finally { this.running = undefined; }
     });
+    if (this.inline) await this.running;
     return record;
   }
 
@@ -156,8 +159,8 @@ export class BackupsService implements OnModuleInit, OnModuleDestroy {
     const partial = this.path(record.id, 'partial');
     try {
       const handle = await open(partial, 'wx', 0o600); await handle.close();
-      await runTool(this.dumpTool, ['--format=custom', '--no-password', '--lock-wait-timeout=15000', '--file', partial], databaseEnvironment(this.connection), this.timeout);
-      await runTool(this.restoreTool, ['--list', partial], { PATH: process.env.PATH }, this.timeout);
+      await exportMysql(this.connection, partial, this.timeout);
+      await verifyMysqlArchive(partial);
       const integrity = await this.checksum(record.id, 'partial');
       await syncBackupArchive(partial);
       await rename(partial, this.path(record.id, 'dump'));
@@ -198,7 +201,7 @@ export class BackupsService implements OnModuleInit, OnModuleDestroy {
       if (integrity.sha256 !== record.sha256 || integrity.bytes !== record.bytes) throw new Error('INTEGRITY');
       return new StreamableFile((await open(this.path(id, 'dump'), constants.O_RDONLY | constants.O_NOFOLLOW)).createReadStream(), {
         type: 'application/octet-stream', length: record.bytes,
-        disposition: `attachment; filename="estoque-${record.startedAt.slice(0, 10)}-${id}.dump"`,
+        disposition: `attachment; filename="estoque-${record.startedAt.slice(0, 10)}-${id}.sql"`,
       });
     } catch { throw new ServiceUnavailableException('O arquivo de backup está indisponível ou falhou na verificação de integridade.'); }
   }

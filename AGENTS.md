@@ -1,3 +1,7 @@
+## Branch de migração MySQL — 05/11/2026
+
+Esta branch usa PrismaMariaDb, SQL InnoDB e migrations em apps/api/prisma/mysql-migrations. A cadeia PostgreSQL original continua preservada em apps/api/prisma/migrations como referência e fonte dos ensaios de transferência. Leia docs/MYSQL_HOSTINGER.md antes de executar comandos de banco. Não executar reset, seed, transferência ou deploy no compartilhado. Esta rodada autoriza implementação e testes isolados. A produção requer aprovação posterior.
+
 # Sistema de Estoque V2 — guia para continuar o projeto
 
 **Clientes/vendas — 23/10/2026:** consultar `docs/CLIENTES_V1.md`. Migration aditiva de clientes/snapshots aplicada após backup e QA isolado; POST público de movimentação exige requestId e, em EXIT/SALE, comprador identificado ou escolha anônima explícita. Não reinterpretar legado nem reescrever snapshots ao editar cadastro. ADMIN/MANAGER gerenciam; OPERATOR lê/cria. Publicar código/migration juntos. Evidências em `artifacts/customers-sales-20261023/REVIEW.md`.

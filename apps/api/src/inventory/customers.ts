@@ -1,3 +1,4 @@
+import { matchingIds } from '../prisma/search';
 import { BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards, ValidationPipe } from '@nestjs/common';
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
@@ -23,7 +24,7 @@ export class CustomerQuery extends PageQuery {
 export class CustomersService {
   constructor(@Inject(PrismaService) private readonly db: PrismaService) {}
   async list(query: CustomerQuery) {
-    const where = { ...(query.active === 'all' ? {} : { active: query.active !== 'false' }), ...(query.search ? { OR: [{ name: { contains: query.search, mode: 'insensitive' as const } }, { code: { contains: query.search, mode: 'insensitive' as const } }] } : {}) };
+    const where = { ...(query.active === 'all' ? {} : { active: query.active !== 'false' }), ...(query.search ? { id: { in: await matchingIds(this.db, 'Customer', ['name', 'code'], query.search) } } : {}) };
     const [items, total] = await this.db.$transaction([this.db.customer.findMany({ where, orderBy: [{ name: 'asc' }, { id: 'asc' }], skip: (query.page - 1) * query.limit, take: query.limit }), this.db.customer.count({ where })]);
     return { items, total, page: query.page, limit: query.limit };
   }
@@ -39,7 +40,7 @@ export class CustomersService {
     if (!Object.keys(data).length || data.name === null || data.active === null) throw new BadRequestException('Informe nome ou situação válidos.');
     return this.db.$transaction(async tx => {
       // Shares the customer-row lock with sale validation; an inactivation cannot race a new sale.
-      const rows = await tx.$queryRaw`SELECT "id" FROM "Customer" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      const rows = await tx.$queryRaw`SELECT "id" FROM "Customer" WHERE "id" = ${id} FOR UPDATE`;
       if (!(rows as unknown[]).length) throw new NotFoundException('Cliente não encontrado.');
       return tx.customer.update({ where: { id }, data });
     });

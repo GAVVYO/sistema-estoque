@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { resolve } from 'node:path';
 import { argon2id, hash } from 'argon2';
-import { PrismaPg } from '@prisma/adapter-pg';
+import { mysqlAdapter } from '../src/prisma/mysql-adapter';
 import { PrismaClient } from '../src/generated/prisma/client';
 
 dotenv.config({ path: resolve(process.cwd(), '../../.env') });
@@ -24,7 +24,7 @@ if (
 }
 
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString }),
+  adapter: mysqlAdapter(connectionString!),
 });
 
 const samples = [

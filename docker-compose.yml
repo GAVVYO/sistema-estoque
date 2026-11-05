@@ -1,19 +1,20 @@
 services:
-  postgres:
-    image: postgres:17-alpine
+  mysql:
+    image: mysql:8.4
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-stock_dev}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stock_dev}
-      POSTGRES_DB: ${POSTGRES_DB:-stock_v2}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-stock_v2}
+      MYSQL_USER: ${MYSQL_USER:-stock_dev}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Defina uma senha local}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Defina a senha root local}
     ports:
-      - '5432:5432'
+      - '127.0.0.1:3306:3306'
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 --silent']
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
 
 volumes:
-  postgres_data:
+  mysql_data:

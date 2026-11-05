@@ -7,14 +7,14 @@ import { Test } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { InventoryModule } from './inventory.module';
 import { InventoryService } from './inventory.service';
-import { Client } from 'pg';
+import { Client } from '../prisma/mysql-test-client';
 import { PrismaService } from '../prisma/prisma.service';
 import { configureAuthHttp } from '../auth/auth.http';
 import { HttpExceptionFilter } from '../common/http-exception.filter';
 import type { CustomerRecord, MovementRecord, Page } from '@stock/shared';
 
 const testUrl = process.env.TEST_CUSTOMERS_DATABASE_URL;
-test('customers and audited sales: real HTTP, PostgreSQL and retry safety', { skip: !testUrl, timeout: 90_000 }, async t => {
+test('customers and audited sales: real HTTP, MySQL and retry safety', { skip: !testUrl, timeout: 90_000 }, async t => {
   const url = new URL(testUrl!);
   assert.ok(['127.0.0.1', 'localhost'].includes(url.hostname) && url.pathname.endsWith('_stock_test'));
   assert.notEqual(testUrl, process.env.DATABASE_URL);
@@ -85,11 +85,11 @@ test('customers and audited sales: real HTTP, PostgreSQL and retry safety', { sk
       const fresh = await (await request('/customers', { name: 'Cliente concorrência ' + tag })).json() as CustomerRecord;
       const blocker = new Client({ connectionString: testUrl }); await blocker.connect();
       try {
-        await blocker.query('BEGIN'); await blocker.query('SELECT id FROM "Customer" WHERE id=$1::uuid FOR UPDATE', [fresh.id]);
+        await blocker.query('BEGIN'); await blocker.query('SELECT id FROM "Customer" WHERE id=$1 FOR UPDATE', [fresh.id]);
         const waitForLocks = async (count: number) => {
           for (let attempt = 0; attempt < 100; attempt++) {
-            await blocker.query('SELECT pg_stat_clear_snapshot()');
-            const result = await blocker.query("SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%Customer%' AND pid<>pg_backend_pid()");
+            // MySQL performance_schema lock waits are live, without PostgreSQL snapshot caching.
+            const result = await blocker.query("SELECT COUNT(*) AS count FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE l.OBJECT_SCHEMA=DATABASE() AND l.OBJECT_NAME='Customer'");
             if (result.rows[0].count >= count) return;
             await new Promise(resolve => setTimeout(resolve, 20));
           }

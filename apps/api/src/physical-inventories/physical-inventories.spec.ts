@@ -14,7 +14,7 @@ import { PhysicalInventoriesModule } from './physical-inventories.module';
 import { PhysicalInventoriesService } from './physical-inventories.service';
 
 // Stubs cover HTTP boundaries only. Row locks, Decimal writes and rollback are
-// verified separately against an explicitly selected, isolated PostgreSQL DB.
+// verified separately against an explicitly selected, isolated MySQL DB.
 describe('physical inventory HTTP authorization and validation', () => {
   const id = '957333d6-2822-449e-81f3-454f2a90be2f';
   const actor = 'd5742179-1503-444f-9eaa-88d38a148144';

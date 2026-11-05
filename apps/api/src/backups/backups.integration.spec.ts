@@ -8,10 +8,10 @@ import { tmpdir } from 'node:os';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
-import { Client } from 'pg';
+import { Client } from '../prisma/mysql-test-client';
 import { BackupsModule } from './backups.module';
 import { BackupsService } from './backups.service';
-import { databaseEnvironment, runTool } from './backup-model';
+import { restoreMysqlArchive } from './mysql-archive';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { configureAuthHttp } from '../auth/auth.http';
@@ -21,7 +21,7 @@ import { UserRole } from '../generated/prisma/client';
 const sourceUrl = process.env.TEST_BACKUP_DATABASE_URL;
 const targetUrl = process.env.TEST_BACKUP_RESTORE_URL;
 
-test('real PostgreSQL: ADMIN HTTP backup, complete restore, integrity, schedule and retention', { skip: !sourceUrl || !targetUrl, timeout: 90_000 }, async () => {
+test('real MySQL: ADMIN HTTP backup, complete restore, integrity, schedule and retention', { skip: !sourceUrl || !targetUrl, timeout: 90_000 }, async () => {
   // Never accept the application's DATABASE_URL or a remote/shared database for this destructive fixture.
   for (const [connection, suffix] of [[sourceUrl!, '_backup_test'], [targetUrl!, '_backup_restore_test']]) {
     const url = new URL(connection);
@@ -40,18 +40,16 @@ test('real PostgreSQL: ADMIN HTTP backup, complete restore, integrity, schedule 
       JWT_SECRET: randomBytes(32).toString('hex'), NODE_ENV: 'test', WEB_ORIGIN: origin,
       DATABASE_URL: sourceUrl, BACKUP_DATABASE_URL: sourceUrl, DIRECT_URL: undefined,
       BACKUP_DIRECTORY: directory, BACKUP_AUTO_ENABLED: false, BACKUP_RETENTION_DAYS: 365,
-      BACKUP_PG_DUMP_PATH: process.env.TEST_PG_DUMP_PATH || 'pg_dump', BACKUP_PG_RESTORE_PATH: process.env.TEST_PG_RESTORE_PATH || 'pg_restore',
     })] }), PrismaModule, BackupsModule],
   }).overrideProvider(PrismaService).useValue({ user: { findUnique: async () => ({ ...account }) } }).compile();
   const app = module.createNestApplication({ logger: false });
   const service = app.get(BackupsService);
   app.setGlobalPrefix('api'); configureAuthHttp(app, app.get(ConfigService)); app.useGlobalFilters(new HttpExceptionFilter());
   try {
-    await source.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-    await target.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-    for (const migration of ['20260930000000_init', '20261002000000_operational_inventory']) {
-      await source.query(await readFile(join(process.cwd(), 'prisma/migrations', migration, 'migration.sql'), 'utf8'));
-    }
+    // Source is independently migrated by the isolated test runner. Restore target
+    // must be empty; never reset an existing database to make this test pass.
+    assert.equal((await source.query('SELECT count(*) AS count FROM "User"')).rows[0].count, 0n);
+    assert.equal((await target.query('SELECT count(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')).rows[0].count, 0n);
     const category = randomUUID(), product = randomUUID();
     await source.query('INSERT INTO "User" (id,name,email,"passwordHash",role,"updatedAt") VALUES ($1,$2,$3,$4,$5,now())', [account.id, account.name, account.email, 'fixture-password-hash', 'ADMIN']);
     await source.query('INSERT INTO "Category" (id,name,"updatedAt") VALUES ($1,$2,now())', [category, 'Categoria QA']);
@@ -95,12 +93,12 @@ test('real PostgreSQL: ADMIN HTTP backup, complete restore, integrity, schedule 
     assert.equal(download.status, 200); assert.equal(download.headers.get('cache-control'), 'no-store');
     assert.match(download.headers.get('content-disposition')!, /attachment; filename="estoque-/);
     const binary = Buffer.from(await download.arrayBuffer());
-    assert.equal(binary.subarray(0, 5).toString(), 'PGDMP');
+    assert.equal(binary.subarray(0, 8).toString(), '-- GAVYO');
     assert.equal(binary.length, result.items[0].bytes);
     const archive = join(directory, `${record.id}.dump`);
     // Change the live source after the snapshot: restore must retain the original product/audit.
     await source.query('UPDATE "Product" SET name=$1 WHERE id=$2', ['Alterado depois da cópia', product]);
-    await runTool(process.env.TEST_PG_RESTORE_PATH || 'pg_restore', ['--no-owner', '--no-privileges', '--exit-on-error', '--single-transaction', '--dbname', databaseEnvironment(targetUrl!).PGDATABASE!, archive], databaseEnvironment(targetUrl!), 30_000);
+    await restoreMysqlArchive(targetUrl!, archive, result.items[0].sha256);
     const restored = (await target.query('SELECT * FROM "Product" WHERE id=$1', [product])).rows[0];
     assert.equal(restored.name, 'Produto íntegro'); assert.equal(restored.stock, '80.125');
     assert.equal(restored.minimumStock, '10.001'); assert.equal(restored.costPrice, '12.34'); assert.equal(restored.salePrice, null);

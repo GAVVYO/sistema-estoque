@@ -13,9 +13,9 @@ import { PhysicalInventoriesService } from './physical-inventories.service';
 // Only UUID fixtures in a dedicated loopback database are written. Audit and
 // inventory records remain for inspection; our products/users are deactivated.
 const connection = process.env.TEST_PHYSICAL_DATABASE_URL;
-test('real PostgreSQL physical counting, atomic adjustments and concurrency', { skip: !connection }, async t => {
+test('real MySQL physical counting, atomic adjustments and concurrency', { skip: !connection }, async t => {
   const url = new URL(connection!);
-  assert(['127.0.0.1', 'localhost'].includes(url.hostname) && url.pathname === '/stock_physical_test', 'Use the isolated loopback stock_physical_test database.');
+  assert(['127.0.0.1', 'localhost'].includes(url.hostname) && url.pathname.endsWith('_physical_test'), 'Use the isolated loopback stock_physical_test database.');
   const db = new PrismaService(new ConfigService({ DATABASE_URL: connection }));
   const service = new PhysicalInventoriesService(db), movements = new InventoryService(db);
   const prefix = 'physical-' + randomUUID();
@@ -123,7 +123,7 @@ test('real PostgreSQL physical counting, atomic adjustments and concurrency', { 
       await movements.move({ productId: item.productId, type: 'ENTRY', reason: 'PURCHASE', quantity: '1' }, operator.id);
       await movements.move({ productId: item.productId, type: 'EXIT', reason: 'SALE', buyerIdentification: 'ANONYMOUS', requestId: randomUUID(), quantity: '1' }, operator.id);
       // Explicitly reproduce the timestamp-precision edge case on this fixture.
-      await db.$executeRaw`UPDATE "Product" SET "updatedAt" = ${new Date(item.snapshotUpdatedAt)} WHERE "id" = ${item.productId}::uuid`;
+      await db.$executeRaw`UPDATE "Product" SET "updatedAt" = ${new Date(item.snapshotUpdatedAt)} WHERE "id" = ${item.productId}`;
       const latest = await service.get(session.id); assert.equal(latest.items[0].currentStock, item.snapshotStock); assert.equal(latest.items[0].currentUpdatedAt, item.snapshotUpdatedAt); assert.equal(latest.conflictedItems, 1);
       await assert.rejects(service.complete(session.id, session.revision, admin.id), /estoque mudou/);
       assert.equal((await service.refresh(session.id, session.revision)).countedItems, 0);

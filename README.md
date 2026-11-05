@@ -1,3 +1,5 @@
+> **Migração MySQL em branch de trabalho.** O runtime e a cadeia de migrations desta branch usam MySQL/MariaDB. Consulte [o procedimento atual de homologação e transferência](docs/MYSQL_HOSTINGER.md). As instruções PostgreSQL abaixo documentam a instalação anterior e não devem ser executadas contra o banco MySQL. Produção depende de revisão e aprovação posterior.
+
 # Sistema de Estoque V2
 
 Esta branch é uma reimplementação progressiva do sistema de estoque. A aplicação PHP/MySQL original permanece na branch `master` como referência funcional enquanto a V2 amadurece. Auth, categorias, produtos, inventário, histórico e painel estão integrados à API PostgreSQL. O frontend não possui fallback de dados fictícios. A validação com banco real ainda está pendente nesta máquina; leia `docs/OPERATIONAL_INTEGRATION.md` para retomar com segurança.

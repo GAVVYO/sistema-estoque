@@ -1,3 +1,4 @@
+import { writeTransaction } from '../prisma/transactions';
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -33,8 +34,8 @@ export class ImagesService implements OnModuleInit, OnModuleDestroy {
     try {
       const candidates = await this.db.productImage.findMany({ where: { state: { in: ['PENDING','READY','DELETING'] }, expiresAt: { lte: new Date() } }, orderBy: { expiresAt: 'asc' }, take: 50 });
       for (const candidate of candidates) {
-        const claimed = await this.db.$transaction(async tx => {
-          const rows = await tx.$queryRaw<{ state: string; url: string | null; expiresAt: Date | null }[]>`SELECT "state", "url", "expiresAt" FROM "ProductImage" WHERE "id" = ${candidate.id}::uuid FOR UPDATE`;
+        const claimed = await writeTransaction(this.db, async tx => {
+          const rows = await tx.$queryRaw<{ state: string; url: string | null; expiresAt: Date | null }[]>`SELECT "state", "url", "expiresAt" FROM "ProductImage" WHERE "id" = ${candidate.id} FOR UPDATE`;
           const asset = rows[0];
           if (!asset || asset.state === 'DELETED' || !asset.expiresAt || asset.expiresAt > new Date()) return false;
           if (asset.url && await tx.product.count({ where: { imageUrl: asset.url } })) {

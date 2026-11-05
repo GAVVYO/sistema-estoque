@@ -1,3 +1,4 @@
+import { writeTransaction } from '../prisma/transactions';
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { MAX_PHYSICAL_INVENTORY_COUNT_UPDATES, MAX_PHYSICAL_INVENTORY_PRODUCTS, type PhysicalInventoryRecord, type PhysicalInventorySummary } from '@stock/shared';
 import { Prisma } from '../generated/prisma/client';
@@ -55,7 +56,7 @@ export class PhysicalInventoriesService {
     return inventory;
   }
   private async lock(tx: Prisma.TransactionClient, id: string) {
-    await tx.$queryRaw`SELECT "id" FROM "PhysicalInventory" WHERE "id" = ${id}::uuid FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "PhysicalInventory" WHERE "id" = ${id} FOR UPDATE`;
     return this.load(tx, id);
   }
   private revision(inventory: Inventory, revision: number) {
@@ -64,11 +65,11 @@ export class PhysicalInventoriesService {
   }
   private async lockProducts(tx: Prisma.TransactionClient, inventory: Inventory) {
     const ids = inventory.items.map(item => item.productId).sort();
-    if (ids.length) await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Product" WHERE "id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))}) ORDER BY "id" FOR UPDATE`);
+    if (ids.length) await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Product" WHERE "id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}`))}) ORDER BY "id" FOR UPDATE`);
     return this.load(tx, inventory.id);
   }
   private async change<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
-    try { return await this.db.$transaction(operation, transactionOptions); }
+    try { return await writeTransaction(this.db, operation, transactionOptions); }
     catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2034', 'P2028'].includes(error.code)) throw new ConflictException('Outro registro está usando estes produtos. Aguarde e tente novamente.');
       throw error;
@@ -97,7 +98,7 @@ export class PhysicalInventoriesService {
       if (products.length > MAX_PHYSICAL_INVENTORY_PRODUCTS) throw new BadRequestException(`O inventário aceita até ${MAX_PHYSICAL_INVENTORY_PRODUCTS} produtos. Selecione uma categoria para reduzir a contagem.`);
       // Lock the selected rows and read after waiting, so snapshot balance and
       // movement count refer to the same point in time for each product.
-      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Product" WHERE "id" IN (${Prisma.join(products.map(product => Prisma.sql`${product.id}::uuid`))}) ORDER BY "id" FOR UPDATE`);
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Product" WHERE "id" IN (${Prisma.join(products.map(product => Prisma.sql`${product.id}`))}) ORDER BY "id" FOR UPDATE`);
       const current = await tx.product.findMany({ where: { id: { in: products.map(product => product.id) }, active: true, categoryId: input.categoryId }, include: { _count: { select: { stockMovements: true } } } });
       if (current.length !== products.length) throw new ConflictException('Um produto foi desativado ou mudou de categoria enquanto o inventário era aberto. Tente novamente.');
       const inventory = await tx.physicalInventory.create({ data: {
@@ -136,13 +137,13 @@ export class PhysicalInventoriesService {
       const inactive = conflicts.filter(item => !item.product.active);
       if (inactive.length) throw new ConflictException({ message: 'Há produtos desativados neste inventário. Reative os produtos ou cancele a contagem e abra outra.', code: 'INVENTORY_PRODUCT_CONFLICT', productIds: inactive.map(item => item.productId) });
       if (conflicts.length) {
-        await tx.$executeRaw(Prisma.sql`UPDATE "PhysicalInventoryItem" AS i SET
-          "sku" = p.sku, "name" = p.name, "unit" = p.unit,
-          "snapshotStock" = p.stock, "snapshotUpdatedAt" = p.updated,
-          "snapshotMovementCount" = p.movements,
-          "countedQuantity" = NULL, "countedById" = NULL, "countedAt" = NULL
-          FROM (VALUES ${Prisma.join(conflicts.map(item => Prisma.sql`(${item.productId}::uuid, ${item.product.sku}::text, ${item.product.name}::text, ${item.product.unit}::"ProductUnit", ${item.product.stock.toFixed(3)}::numeric, ${item.product.updatedAt}::timestamp, ${item.product._count.stockMovements}::integer)`))}) AS p(id,sku,name,unit,stock,updated,movements)
-          WHERE i."inventoryId" = ${id}::uuid AND i."productId" = p.id`);
+        for (const item of conflicts) await tx.physicalInventoryItem.update({
+          where: { inventoryId_productId: { inventoryId: id, productId: item.productId } },
+          data: { sku: item.product.sku, name: item.product.name, unit: item.product.unit,
+            snapshotStock: item.product.stock, snapshotUpdatedAt: item.product.updatedAt,
+            snapshotMovementCount: item.product._count.stockMovements,
+            countedQuantity: null, countedById: null, countedAt: null },
+        });
         await tx.physicalInventory.update({ where: { id }, data: { revision: { increment: 1 } } });
       }
       return inventoryResponse(await this.load(tx, id));
@@ -168,7 +169,9 @@ export class PhysicalInventoriesService {
         await tx.stockMovement.createMany({ data: adjustments.map(({ item, type, amount, next }) => ({ productId: item.productId, userId, type, quantity: amount, previousStock: item.product.stock, resultingStock: next, reason: 'INVENTORY_ADJUSTMENT', reference: `inventory:${id}`, notes: `Inventário: ${inventory.title}${item.notes ? ` — ${item.notes}` : ''}` })) });
         // All product rows are already locked in UUID order; one batch preserves
         // Decimal precision and the same audit invariants as ordinary movements.
-        await tx.$executeRaw(Prisma.sql`UPDATE "Product" AS p SET "stock" = b.stock, "updatedAt" = clock_timestamp() FROM (VALUES ${Prisma.join(adjustments.map(({ item, next }) => Prisma.sql`(${item.productId}::uuid, ${next.toFixed(3)}::numeric)`))}) AS b(id,stock) WHERE p."id" = b.id`);
+        for (const { item, next } of adjustments) await tx.product.update({
+          where: { id: item.productId }, data: { stock: next },
+        });
       }
       await tx.physicalInventory.update({ where: { id }, data: { status: 'COMPLETED', revision: { increment: 1 }, completedById: userId, completedAt: new Date(), adjustmentCount: adjustments.length } });
       return inventoryResponse(await this.load(tx, id));

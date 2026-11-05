@@ -1,3 +1,7 @@
+import { midnight, timezone } from './operational-time';
+import { matchingIds } from '../prisma/search';
+import { writeTransaction } from '../prisma/transactions';
+import { lockOperation } from '../prisma/transactions';
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { auditedStockHistory } from './stock-history';
 import { ConfigService } from '@nestjs/config';
@@ -47,7 +51,7 @@ export class InventoryService {
   }
   async products(query: ProductQuery) {
     const where: Prisma.ProductWhereInput = { active: query.active === 'all' ? undefined : query.active !== 'false' };
-    if (query.search?.trim()) where.OR = ['name', 'sku', 'barcode'].map(field => ({ [field]: { contains: query.search!.trim(), mode: 'insensitive' } }));
+    if (query.search?.trim()) where.id = { in: await matchingIds(this.db, 'Product', ['name', 'sku', 'barcode'], query.search.trim()) };
     if (query.category) where.categoryId = query.category;
     const minimum = this.db.product.fields.minimumStock;
     if (query.stockStatus === 'OUT') where.stock = { lte: 0 };
@@ -68,20 +72,22 @@ export class InventoryService {
     return { ...record, unitLocked: _count.stockMovements > 0 || !product.stock.isZero() };
   }
   async stockHistory(id: string, days: number) {
-    return this.db.$transaction(async tx => {
+    return writeTransaction(this.db, async tx => {
       const product = await tx.product.findUnique({ where: { id } });
       if (!product) throw new NotFoundException('Produto não encontrado.');
-      const [range] = await tx.$queryRaw<Array<{ from: Date; to: Date }>>`
-        SELECT (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date - ${days - 1}::int)::timestamp AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC' AS "from",
-          (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::timestamp AS "to"`;
+      const now = new Date();
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now).map(part => [part.type, part.value]));
+      const firstDay = new Date(Date.parse(`${parts.year}-${parts.month}-${parts.day}T12:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);
+      const range = { from: midnight(firstDay), to: now };
       // A bounded complete audit, never a paginated fragment presented as history.
       const events = await tx.stockMovement.findMany({ where: { productId: id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 5001,
         select: { id: true, createdAt: true, type: true, reason: true, quantity: true, previousStock: true, resultingStock: true } });
       return auditedStockHistory(product.stock, events, range.from, range.to);
     }, { isolationLevel: 'RepeatableRead' });
   }
-  lookup(code: string) {
-    return this.db.product.findMany({ where: { active: true, OR: [{ sku: { equals: code, mode: 'insensitive' } }, { barcode: code }] }, include: productInclude });
+  async lookup(code: string) {
+    const rows = await this.db.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Product" WHERE "active" = true AND (BINARY LOWER("sku") = BINARY LOWER(${code}) OR BINARY "barcode" = BINARY ${code})`;
+    return this.db.product.findMany({ where: { id: { in: rows.map(row => row.id) } }, include: productInclude });
   }
   private async activeCategory(tx: Prisma.TransactionClient, id: string) {
     const category = await tx.category.findUnique({ where: { id } });
@@ -91,7 +97,7 @@ export class InventoryService {
     const { initialEntry, ...data } = input;
     if (data.active === null) throw new BadRequestException('Situação não pode ser nula.');
     try {
-      return await this.db.$transaction(async tx => {
+      return await writeTransaction(this.db, async tx => {
         await this.activeCategory(tx, data.categoryId);
         await claimImage(tx, data.imageUrl, userId);
         const product = await tx.product.create({ data: { ...data, barcode: data.barcode || null, stock: 0 }, include: productInclude });
@@ -108,7 +114,7 @@ export class InventoryService {
   async createImportProducts(tx: Prisma.TransactionClient, inputs: ProductCreate[], userId: string, importId: string) {
     const prepared = inputs.map(({ initialEntry, ...data }) => ({ id: randomUUID(), data, initialEntry }));
     const categoryIds = [...new Set(inputs.map(input => input.categoryId))].sort();
-    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Category" WHERE "id" IN (${Prisma.join(categoryIds.map(id => Prisma.sql`${id}::uuid`))}) ORDER BY "id" FOR SHARE`);
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Category" WHERE "id" IN (${Prisma.join(categoryIds.map(id => Prisma.sql`${id}`))}) ORDER BY "id" LOCK IN SHARE MODE`);
     const active = await tx.category.count({ where: { id: { in: categoryIds }, active: true } });
     if (active !== categoryIds.length) throw new BadRequestException('Selecione uma categoria ativa.');
     for (const url of [...new Set(inputs.map(input => input.imageUrl).filter(isManagedImage))].sort()) await claimImage(tx, url, userId);
@@ -116,7 +122,7 @@ export class InventoryService {
     const balances = prepared.flatMap(item => item.initialEntry ? [{ id: item.id, ...resultingStock(new Prisma.Decimal(0), item.initialEntry.quantity, 'ENTRY') }] : []);
     if (balances.length) {
       await tx.stockMovement.createMany({ data: balances.map(item => ({ productId: item.id, userId, type: 'ENTRY', reason: 'INITIAL_STOCK', quantity: item.amount, previousStock: 0, resultingStock: item.next, reference: importId, notes: 'Estoque inicial — importação' })) });
-      await tx.$executeRaw(Prisma.sql`UPDATE "Product" AS p SET "stock" = b.stock, "updatedAt" = CURRENT_TIMESTAMP FROM (VALUES ${Prisma.join(balances.map(item => Prisma.sql`(${item.id}::uuid, ${item.next.toFixed(3)}::numeric)`))}) AS b(id,stock) WHERE p."id" = b.id`);
+      for (const item of balances) await tx.product.update({ where: { id: item.id }, data: { stock: item.next } });
     }
     return { products: prepared.length, movements: balances.length };
   }
@@ -125,8 +131,8 @@ export class InventoryService {
       if (data[key] === null) throw new BadRequestException('Campos obrigatórios não podem ser nulos.');
     }
     try {
-      return await this.db.$transaction(async tx => {
-        await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      return await writeTransaction(this.db, async tx => {
+        await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${id} FOR UPDATE`;
         const current = await tx.product.findUnique({ where: { id } });
         if (!current) throw new NotFoundException('Produto não encontrado.');
         // The same product lock serializes this check with every stock movement.
@@ -146,13 +152,13 @@ export class InventoryService {
   async moveInTransaction(tx: Prisma.TransactionClient, data: MovementInput, userId: string, requestHash?: string) {
     let buyer = {};
     if (data.buyerIdentification === 'IDENTIFIED' && data.customerId) {
-      await tx.$queryRaw`SELECT "id" FROM "Customer" WHERE "id" = ${data.customerId}::uuid FOR SHARE`;
+      await tx.$queryRaw`SELECT "id" FROM "Customer" WHERE "id" = ${data.customerId} LOCK IN SHARE MODE`;
       const customer = await tx.customer.findUnique({ where: { id: data.customerId } });
       if (!customer?.active) throw new BadRequestException('Cliente inativo ou indisponível. Selecione outro cliente ou escolha Sem identificação.');
       buyer = { customerNameSnapshot: customer.name, customerCodeSnapshot: customer.code };
     }
     // PostgreSQL row lock serializes stock writes for this product only. Read after lock.
-    await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${data.productId}::uuid FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${data.productId} FOR UPDATE`;
     const product = await tx.product.findUnique({ where: { id: data.productId } });
     if (!product) throw new NotFoundException('Produto não encontrado.');
     if (!product.active) throw new BadRequestException('Produto inativo não pode ser movimentado.');
@@ -169,9 +175,9 @@ export class InventoryService {
       if (!['IDENTIFIED', 'ANONYMOUS'].includes(data.buyerIdentification ?? '') || (data.buyerIdentification === 'IDENTIFIED' ? !data.customerId : Boolean(data.customerId))) throw new BadRequestException('Selecione um cliente ou escolha explicitamente Sem identificação.');
     } else if (data.customerId || data.buyerIdentification) throw new BadRequestException('O comprador só pode ser informado em uma saída por venda.');
     const requestHash = data.requestId ? createHash('sha256').update(JSON.stringify([data.productId, data.type, data.reason, new Prisma.Decimal(data.quantity).toFixed(), data.reference || null, data.notes || null, data.customerId || null, data.buyerIdentification || null])).digest('hex') : undefined;
-    try { return await this.db.$transaction(async tx => {
+    try { return await writeTransaction(this.db, async tx => {
       if (data.requestId) {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId + ':' + data.requestId}, 0))`;
+        await lockOperation(tx, userId + ":" + data.requestId);
         const previous = await tx.stockMovement.findUnique({ where: { userId_requestId: { userId, requestId: data.requestId } }, include: movementInclude });
         if (previous) {
           if (previous.requestHash !== requestHash) throw new ConflictException('Esta confirmação já foi usada com outros dados. Confira o Histórico antes de iniciar outra operação.');
@@ -186,7 +192,7 @@ export class InventoryService {
     const to = query.to ? new Date(query.to) : undefined;
     if ((from && !Number.isFinite(from.getTime())) || (to && !Number.isFinite(to.getTime())) || (from && to && from > to)) throw new BadRequestException('Período inválido.');
     const where: Prisma.StockMovementWhereInput = { customerId: query.customerId, productId: query.productId, reference: query.reference, type: query.type, reason: query.reason, createdAt: { gte: from, lte: to } };
-    if (query.search?.trim()) where.product = { OR: ['name', 'sku', 'barcode'].map(field => ({ [field]: { contains: query.search!.trim(), mode: 'insensitive' } })) };
+    if (query.search?.trim()) where.productId = { in: await matchingIds(this.db, 'Product', ['name', 'sku', 'barcode'], query.search.trim()) };
     const [items, total] = await this.db.$transaction([
       this.db.stockMovement.findMany({ where, include: movementInclude, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (query.page - 1) * query.limit, take: query.limit }),
       this.db.stockMovement.count({ where }),
