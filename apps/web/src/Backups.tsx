@@ -73,7 +73,7 @@ function BackupsContent() {
         <p>A própria empresa é responsável pelas cópias e pela recuperação do seu banco de dados. Siga estes passos:</p>
         <ol>
           <li><strong>Escolha a cópia.</strong> Em Cópias salvas, confira a data e escolha um backup com situação Disponível.</li>
-          <li><strong>Baixe o arquivo.</strong> Clique em Baixar e guarde o arquivo <code>.dump</code>, sem alterar o nome.</li>
+          <li><strong>Baixe o arquivo.</strong> Clique em Baixar e guarde o arquivo <code>.sql</code>, sem alterar o nome.</li>
           <li><strong>Solicite a restauração.</strong> Encaminhe o arquivo ao administrador do banco de dados da sua empresa e informe a data que deseja recuperar.</li>
           <li><strong>Confira os dados.</strong> Após a restauração, verifique produtos, saldos e histórico antes de retomar os lançamentos.</li>
         </ol>

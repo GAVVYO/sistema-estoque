@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { open, rename } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -36,42 +35,6 @@ export const recordSchema = z.object({
 });
 export type BackupRecord = z.infer<typeof recordSchema>;
 export const backupIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-// libpq credentials travel in the child environment, never in argv or output.
-export function databaseEnvironment(connection: string): NodeJS.ProcessEnv {
-  const url = new URL(connection);
-  if (url.protocol !== 'postgresql:' || !url.hostname || !url.pathname.slice(1)) throw new Error('INVALID_DATABASE');
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of ['PATH', 'SystemRoot', 'TMPDIR', 'TEMP', 'LANG', 'LC_ALL']) {
-    if (process.env[key]) env[key] = process.env[key];
-  }
-  Object.assign(env, {
-    PGHOST: url.hostname.replace(/^\[|\]$/g, ''), PGPORT: url.port || '5432',
-    PGUSER: decodeURIComponent(url.username), PGPASSWORD: decodeURIComponent(url.password),
-    PGDATABASE: decodeURIComponent(url.pathname.slice(1)), PGCONNECT_TIMEOUT: '15',
-  });
-  for (const [parameter, variable] of [['sslmode', 'PGSSLMODE'], ['channel_binding', 'PGCHANNELBINDING'], ['sslrootcert', 'PGSSLROOTCERT']] as const) {
-    const value = url.searchParams.get(parameter);
-    if (value) env[variable] = value;
-  }
-  return env;
-}
-
-export function runTool(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // stderr can contain database credentials; it is deliberately not logged or returned.
-    const child = spawn(binary, args, { env, stdio: 'ignore', shell: false });
-    let expired = false;
-    const timer = setTimeout(() => { expired = true; child.kill('SIGKILL'); }, timeoutMs);
-    child.once('error', () => { clearTimeout(timer); reject(new Error('TOOL_UNAVAILABLE')); });
-    child.once('close', code => {
-      clearTimeout(timer);
-      if (expired) reject(new Error('TIMEOUT'));
-      else if (code !== 0) reject(new Error('TOOL_FAILED'));
-      else resolve();
-    });
-  });
-}
 
 export function scheduleWindow(now: Date, timeZone: string, schedule: BackupSchedule) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {

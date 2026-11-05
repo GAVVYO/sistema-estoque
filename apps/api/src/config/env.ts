@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const envSchema = z.object({
-  DATABASE_URL: z.string().startsWith('postgresql://'),
+  DATABASE_URL: z.string().startsWith('mysql://'),
   CLOUDINARY_CLOUD_NAME: z.preprocess(value => value === '' ? undefined : value, z.string().regex(/^[a-zA-Z0-9_-]+$/).optional()),
   CLOUDINARY_API_KEY: z.preprocess(value => value === '' ? undefined : value, z.string().regex(/^\d+$/).optional()),
   CLOUDINARY_API_SECRET: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
@@ -12,10 +12,10 @@ const envSchema = z.object({
   }, 'WEB_ORIGIN deve ser uma origem HTTP(S) sem caminho ou barra final.'),
   JWT_SECRET: z.string().trim().min(32, 'JWT_SECRET deve conter ao menos 32 caracteres.'),
   BACKUP_DIRECTORY: z.string().min(1).default('../../var/backups'),
-  BACKUP_DATABASE_URL: z.string().startsWith('postgresql://').optional(),
-  DIRECT_URL: z.string().startsWith('postgresql://').optional(),
-  BACKUP_PG_DUMP_PATH: z.string().min(1).default('pg_dump'),
-  BACKUP_PG_RESTORE_PATH: z.string().min(1).default('pg_restore'),
+  BACKUP_DATABASE_URL: z.string().startsWith('mysql://').optional(),
+  DIRECT_URL: z.string().startsWith('mysql://').optional(),
+  BACKUP_SCHEDULER_MODE: z.enum(['internal', 'external']).default('internal'),
+  BACKUP_EXECUTION_MODE: z.enum(['background', 'inline']).default('background'),
   BACKUP_AUTO_ENABLED: z.enum(['true', 'false']).default('true').transform(value => value === 'true'),
   BACKUP_RETENTION_DAYS: z.coerce.number().int().min(31).max(3650).default(365),
   BACKUP_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(86400).default(1800),
@@ -29,7 +29,7 @@ const envSchema = z.object({
 }).refine(values => [values.CLOUDINARY_CLOUD_NAME, values.CLOUDINARY_API_KEY, values.CLOUDINARY_API_SECRET].filter(Boolean).length % 3 === 0, { message: 'Configure as três variáveis CLOUDINARY ou deixe todas vazias.' });
 
 export function validateEnv(input: Record<string, unknown>) {
-  const result = envSchema.safeParse(input);
+  const result = envSchema.safeParse({ ...input, API_PORT: input.PORT ?? input.API_PORT });
   if (!result.success) {
     throw new Error(`Configuração inválida: ${z.prettifyError(result.error)}`);
   }

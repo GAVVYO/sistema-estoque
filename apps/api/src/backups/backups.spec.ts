@@ -1,3 +1,6 @@
+import { mysqlOptions } from '../prisma/mysql-adapter';
+import { exportMysql } from './mysql-archive';
+import { createServer } from 'node:net';
 import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -6,7 +9,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:f
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BackupsService } from './backups.service';
-import { databaseEnvironment, replaceBackupMetadata, runTool, syncBackupArchive, scheduleWindow } from './backup-model';
+import { replaceBackupMetadata, syncBackupArchive, scheduleWindow } from './backup-model';
 
 test('archive sync uses a Windows-compatible handle without truncating the dump', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'stock-backup-sync-'));
@@ -21,7 +24,7 @@ test('archive sync uses a Windows-compatible handle without truncating the dump'
 
 async function fixture(extra: Record<string, unknown> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'stock-backup-test-'));
-  const service = new BackupsService(new ConfigService({ DATABASE_URL: 'postgresql://user:secret@127.0.0.1:1/absent', BACKUP_DIRECTORY: directory, BACKUP_AUTO_ENABLED: false, ...extra }));
+  const service = new BackupsService(new ConfigService({ DATABASE_URL: 'mysql://user:secret@127.0.0.1:1/absent', BACKUP_DIRECTORY: directory, BACKUP_AUTO_ENABLED: false, ...extra }));
   await service.onModuleInit();
   return { service, directory, close: async () => { await service.onModuleDestroy(); await rm(directory, { recursive: true, force: true }); } };
 }
@@ -34,12 +37,11 @@ async function settled(service: BackupsService) {
   throw new Error('Backup did not settle');
 }
 
-test('credentials remain out of arguments, process secrets and errors', async () => {
-  const env = databaseEnvironment('postgresql://name%40test:p%40ss%2Fword@127.0.0.1:5540/test?schema=public&sslmode=require&channel_binding=require');
-  assert.equal(env.PGUSER, 'name@test'); assert.equal(env.PGPASSWORD, 'p@ss/word');
-  assert.equal(env.PGSSLMODE, 'require'); assert.equal(env.PGCHANNELBINDING, 'require');
-  assert.equal(env.JWT_SECRET, undefined); assert.equal(env.DATABASE_URL, undefined);
-  await assert.rejects(runTool('/missing/pg_dump', [], env, 1000), /TOOL_UNAVAILABLE/);
+test('database credentials are decoded only into driver configuration', () => {
+  const options = mysqlOptions('mysql://name%40test:p%40ss%2Fword@127.0.0.1:5540/test?sslmode=require');
+  assert.equal(options.user, 'name@test'); assert.equal(options.password, 'p@ss/word');
+  assert.equal(options.ssl?.rejectUnauthorized, true);
+  assert.equal('JWT_SECRET' in options, false); assert.equal('DATABASE_URL' in options, false);
 });
 
 test('transient Windows rename denial preserves old metadata until atomic replacement', async () => {
@@ -72,19 +74,31 @@ test('monthly/weekly scheduling respects Fortaleza time, rollover and missed run
   assert.equal(scheduleWindow(new Date('2027-01-03T15:00:00Z'), 'America/Fortaleza', weekly).period, 'WEEKLY:2026-12-28');
 });
 
-test('hung tool is terminated without exposing its arguments or stderr', async () => {
-  await assert.rejects(runTool(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { PATH: process.env.PATH }, 50), /TIMEOUT/);
+test('stalled database handshake is bounded and publishes no archive', async () => {
+  const sockets = new Set<import('node:net').Socket>();
+  const server = createServer(socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const directory = await mkdtemp(join(tmpdir(), 'stock-backup-timeout-'));
+  try {
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    await assert.rejects(exportMysql('mysql://test:secret@127.0.0.1:' + port + '/timeout_test', join(directory, 'partial'), 50), /timeout/i);
+    assert.equal((await readdir(directory)).length, 0);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('failed dump never becomes downloadable and refuses overlapping jobs', async () => {
-  const fixtureData = await fixture({ BACKUP_PG_DUMP_PATH: '/missing/pg_dump' });
+  const fixtureData = await fixture();
   const { service, directory } = fixtureData;
   try {
     const first = await service.create('Administrador');
     await assert.rejects(service.create('Outro administrador'), /andamento/);
     const result = await settled(service);
     assert.equal(result.items[0].status, 'FAILED');
-    assert.doesNotMatch(JSON.stringify(result), /secret|postgresql:\/\//);
+    assert.doesNotMatch(JSON.stringify(result), /secret|mysql:\/\//);
     assert.equal((await readdir(directory)).some(name => name.endsWith('.partial') || name.endsWith('.dump')), false);
     await assert.rejects(service.download(first.id), /disponível/);
     await assert.rejects(service.download('../../.env'));
@@ -97,7 +111,7 @@ test('administrator schedule persists across service restart', async () => {
     const schedule = { enabled: false, frequency: 'WEEKLY' as const, weekday: 5, hour: '19:30' };
     await fixtureData.service.updateSchedule(schedule);
     await fixtureData.service.onModuleDestroy();
-    const second = new BackupsService(new ConfigService({ DATABASE_URL: 'postgresql://local:local@localhost/test', BACKUP_DIRECTORY: fixtureData.directory }));
+    const second = new BackupsService(new ConfigService({ DATABASE_URL: 'mysql://local:local@localhost/test', BACKUP_DIRECTORY: fixtureData.directory }));
     await second.onModuleInit();
     assert.deepEqual((await second.list()).schedule, schedule);
     await second.onModuleDestroy();
@@ -106,7 +120,7 @@ test('administrator schedule persists across service restart', async () => {
 });
 
 test('failed automatic period waits an hour before retrying', async () => {
-  const fixtureData = await fixture({ BACKUP_PG_DUMP_PATH: '/missing/pg_dump' });
+  const fixtureData = await fixture();
   try {
     await fixtureData.service.updateSchedule({ enabled: true, frequency: 'MONTHLY', weekday: 1, hour: '00:00' });
     await fixtureData.service.tick();
@@ -125,7 +139,7 @@ test('crashed worker is marked failed and its partial file is removed on restart
     await writeFile(join(fixtureData.directory, `${id}.partial`), 'incomplete');
     await mkdir(join(fixtureData.directory, '.lock'));
     await writeFile(join(fixtureData.directory, '.lock', 'owner.json'), JSON.stringify({ pid: 2147483647, host: hostname() }));
-    const second = new BackupsService(new ConfigService({ DATABASE_URL: 'postgresql://local:local@localhost/test', BACKUP_DIRECTORY: fixtureData.directory, BACKUP_AUTO_ENABLED: false }));
+    const second = new BackupsService(new ConfigService({ DATABASE_URL: 'mysql://local:local@localhost/test', BACKUP_DIRECTORY: fixtureData.directory, BACKUP_AUTO_ENABLED: false }));
     await second.onModuleInit();
     assert.equal((await second.list()).items[0].status, 'FAILED');
     assert.equal((await readdir(fixtureData.directory)).includes(`${id}.partial`), false);
